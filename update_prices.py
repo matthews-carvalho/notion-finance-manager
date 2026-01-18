@@ -34,7 +34,7 @@ FI_ADDITIONAL_FIXED_RATE = "Additional Fixed Rate" # Taxa fixa adicional (para I
 FI_BALANCE = "Balance" # Saldo atual com juros compostos
 FI_TOTAL_INVESTED = "Total Invested" # Total investido
 FI_TOTAL_WITHDRAWN = "Total Withdrawn" # Total sacado
-FI_LAST_DATE = "Last Update" # Data da última atualização
+FI_LAST_UPDATE = "Last Update" # Data da última atualização
 FI_INVESTMENT_DATE = "Investment Date" # Data da compra
 FI_DUE_DATE = "Due Date" # Data de vencimento
 FI_INFLATION = "Inflation" # Inflação (IPCA)
@@ -482,7 +482,7 @@ def update_fixed_income_assets():
                 continue
             investment_date_str = props[FI_INVESTMENT_DATE]["rollup"]["date"]["start"]
             due_date_str = props[FI_DUE_DATE]["date"]["start"]
-            last_update_str = props[FI_LAST_DATE]["date"]["start"] if props["Last Update"]["date"] else None
+            last_update_str = props[FI_LAST_UPDATE]["date"]["start"] if props["Last Update"]["date"] else None
 
             investment_date = parser.parse(investment_date_str).date()
             due_date = parser.parse(due_date_str).date()
@@ -538,7 +538,7 @@ def update_fixed_income_assets():
             payload = {
                 "properties": {
                     FI_BALANCE: {"number": round(new_balance, 2)},
-                    FI_LAST_DATE: {"date": {"start": datetime.now().isoformat()}}
+                    FI_LAST_UPDATE: {"date": {"start": datetime.now().isoformat()}}
                 }
             }
 
