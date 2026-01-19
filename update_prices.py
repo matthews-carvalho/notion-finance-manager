@@ -422,7 +422,7 @@ def get_cdi_rate() -> Optional[float]:
         print(f"Erro ao buscar CDI: {e}")
         return None
 
-def get_ipca_accumulated(purchase_date: date, end_date: date) -> float:
+def get_accumulated_ipca(purchase_date: date, end_date: date) -> float:
     """Calcula o IPCA acumulado (composto) entre purchase_date e end_date"""
     url = (
         f"https://api.bcb.gov.br/dados/serie/bcdata.sgs.433/dados?"
