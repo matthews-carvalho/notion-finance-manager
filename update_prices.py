@@ -381,6 +381,47 @@ def get_selic_over():
         print(f"Erro ao buscar Selic Over: {e}")
         return None
 
+def get_cdi_rate() -> Optional[float]:
+    """
+    Retorna a última taxa CDI (DI Over anualizada) disponível.
+    Busca uma janela de dias para garantir retorno mesmo em feriados ou antes da divulgação.
+    
+    Fonte: Banco Central do Brasil - SGS série 4389 (Taxa DI anualizada base 252)
+    Retorno:
+        (data_da_taxa, taxa_anual_decimal)
+    """
+    try:
+        today = date.today()
+        # Voltamos 10 dias para garantir que pegaremos o último dia útil 
+        # mesmo se houver feriados prolongados (ex: Carnaval)
+        start_date = today - timedelta(days=10)
+        
+        url = (
+            "https://api.bcb.gov.br/dados/serie/bcdata.sgs.4389/dados"
+            f"?formato=json&dataInicial={start_date.strftime("%d/%m/%Y")}"
+            f"&dataFinal={today.strftime("%d/%m/%Y")}"
+        )
+
+        response = requests.get(url, timeout=15)
+        response.raise_for_status()
+
+        data = response.json()
+
+        if not data:
+            print("CDI: Nenhum dado retornado pelo BCB na janela solicitada.")
+            return None
+
+        # Pega o ÚLTIMO elemento da lista, que é a data mais recente disponível
+        last = data[-1]
+
+        rate_value = float(last["valor"]) / 100  # Ex: 11.15 viram 0.1115
+
+        return rate_value
+
+    except Exception as e:
+        print(f"Erro ao buscar CDI: {e}")
+        return None
+
 def get_ipca_accumulated(purchase_date: date, end_date: date) -> float:
     """Calcula o IPCA acumulado (composto) entre purchase_date e end_date"""
     url = (
