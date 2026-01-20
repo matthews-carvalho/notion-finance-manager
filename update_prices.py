@@ -5,6 +5,7 @@ from dateutil import parser
 import os
 from dotenv import load_dotenv
 import holidays
+from typing import Optional, Tuple
 
 load_dotenv() # Carrega variáveis de ambiente do arquivo .env
 
@@ -107,7 +108,7 @@ def log_and_print(message, level='info'):
         
 # ------------------ FUNÇÕES GERAIS -------------------------
 
-def get_net_workdays(start_date, end_date):
+def get_net_workdays(start_date, end_date) -> int:
     """Conta dias úteis entre duas datas excluindo feriados e fins de semana"""
     # Se usar numpy: return np.busday_count(start_date, end_date)
     # Implementação simples com loop (para volumes pequenos de dados é ok):
@@ -119,7 +120,7 @@ def get_net_workdays(start_date, end_date):
             days += 1
     return days
 
-def get_assets_from_notion(DATABASE_ID):
+def get_assets_from_notion(DATABASE_ID) -> Optional[list]:
     try:
         url = f"https://api.notion.com/v1/databases/{DATABASE_ID}/query"
         response = requests.post(url, headers=notion_headers, timeout=20)
@@ -131,7 +132,7 @@ def get_assets_from_notion(DATABASE_ID):
         log_and_print(f"Erro ao buscar dados do Notion: {e}", level='error')
         return []
 
-def extract_asset_name_from_title(page):
+def extract_asset_name_from_title(page) -> Optional[str]:
     try:
         properties = page['properties'] # Pega as propriedades da página
         title_field = properties[VI_TICKER] # Pega o campo do título
@@ -146,7 +147,7 @@ def extract_asset_name_from_title(page):
         return None
 # ---------------- FUNÇÕES RENDA VARIÁVEL -------------------
 
-def get_price_from_apis(ticker):
+def get_price_from_apis(ticker) -> Optional[float]:
     """Lógica de cascata priorizando APIs com maior cobertura de ativos e número de requisições gratuitas"""
 
     # 1) EOD Historical Data (forte global + BR)
@@ -202,7 +203,7 @@ def get_price_from_apis(ticker):
 
 # Twelve Data API para buscar o preço dos ativos dos EUA
 # https://twelvedata.com/docs/api/price
-def get_from_twelve_data(ticker):
+def get_from_twelve_data(ticker) -> Optional[float]:
     try:
         url = f"https://api.twelvedata.com/price?symbol={ticker}&apikey={TWELVE_DATA_API_KEY}"
         response = requests.get(url, timeout=10)
@@ -216,7 +217,7 @@ def get_from_twelve_data(ticker):
         log_and_print(f"Erro ao buscar preço de {ticker} na Twelve Data: {e}", level='error')
         return None
 
-def get_from_yahoo_finance(ticker, region):
+def get_from_yahoo_finance(ticker, region) -> Optional[float]:
     try:
         # URL da API do Yahoo Finance
         #url = "https://apidojo-yahoo-finance-v1.p.rapidapi.com/stock/v2/get-timeseries"
@@ -245,7 +246,7 @@ def get_from_yahoo_finance(ticker, region):
         log_and_print(f"Erro ao buscar preço de {ticker} no Yahoo Finance: {e}", level='error')
         return None
 
-def get_from_brapi(ticker):
+def get_from_brapi(ticker) -> Optional[float]:
     try:
         url = f"https://brapi.dev/api/quote/{ticker.upper()}?token={BRAPI_TOKEN}"
         response = requests.get(url, timeout=10)
@@ -262,7 +263,7 @@ def get_from_brapi(ticker):
         log_and_print(f"Erro ao buscar {ticker} na Brapi: {e}", level='error')
         return None
 
-def get_from_eod(ticker):
+def get_from_eod(ticker) -> Optional[float]:
     try:
         # tenta primeiro Brasil (.SA) se parecer B3
         query_ticker = ticker
@@ -282,7 +283,7 @@ def get_from_eod(ticker):
         log_and_print(f"Erro EOD Historical para {ticker}: {e}", level='error')
     return None
 
-def get_from_alpha_vantage(ticker):
+def get_from_alpha_vantage(ticker) -> Optional[float]:
     try:
         url = f"https://www.alphavantage.co/query?function=GLOBAL_QUOTE&symbol={ticker}&apikey={ALPHA_VANTAGE_API_KEY}"
         resp = requests.get(url, timeout=10)
@@ -295,7 +296,7 @@ def get_from_alpha_vantage(ticker):
         log_and_print(f"Erro AlphaVantage {ticker}: {e}", level='error')
     return None
 
-def get_from_finnhub(ticker):
+def get_from_finnhub(ticker) -> Optional[float]:
     try:
         # ajusta ticker para US ou BR
         query_ticker = ticker
@@ -369,7 +370,7 @@ def update_variable_income_assets():
 
 # ------------------ API Banco Central ------------------
 
-def get_selic_over():
+def get_selic_over() -> Optional[float]:
     url = "https://api.bcb.gov.br/dados/serie/bcdata.sgs.1178/dados/ultimos/1?formato=json"
     try:
         response = requests.get(url, timeout=10)
