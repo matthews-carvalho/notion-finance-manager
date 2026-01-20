@@ -457,51 +457,6 @@ def get_accumulated_ipca(purchase_date: date, end_date: date) -> float:
 
 # ---------------- FUNÇÕES RENDA FIXA -------------------
 
-def calculate_fixed_income(investment, selic, today: date):
-    amount = investment["Amount"]
-    purchase_date = investment["Purchase Date"]
-    due_date = investment["Due Date"]
-    days_elapsed = investment["Days Elapsed"]
-    indexer = investment["Indexer"]
-    indexer_pct = investment["Indexer %"] / 100  # Converte para decimal
-    fixed_rate = investment["Additional Fixed Rate"] / 100  # Converte para decimal
-    investment_type = investment["Type"]
-    
-    if not amount or not purchase_date:
-        return None, None
-
-    # Se já venceu, não calcular
-    if due_date and today > due_date:
-        print(f"Investimento vencido ({due_date}), pulando cálculo.")
-        return None, None
-
-    end_date = min(today, due_date) if due_date else today
-    #days_elapsed = (end_date - purchase_date).days
-    if days_elapsed < 0:
-        return None, None
-
-    current_amount = amount
-    inflation_accum = None
-
-    # CDI ≈ Selic - 0.1% a.a
-    cdi = selic - 0.001
-    
-    if indexer == "Selic" or investment_type == "Tesouro Selic":
-        taxa_diaria = selic / 252
-        taxa_final = taxa_diaria * indexer_pct
-        current_amount = amount * ((1 + taxa_final) ** days_elapsed)
-    
-    elif indexer == "IPCA" or investment_type in ["Tesouro IPCA+"]:
-        ipca = get_ipca_accumulated(purchase_date, today)
-        inflation_accum = ipca
-        taxa_fixa_diaria = (1 + fixed_rate) ** (1 / 252) - 1
-        current_amount = amount * ((1 + taxa_fixa_diaria) ** days_elapsed)
-        if ipca is not None:
-            current_amount *= (1 + ipca)
-    
-    return current_amount, inflation_accum
-
-
 def update_fixed_income_assets():
     log_and_print("Atualizando ativos de renda fixa...")
 
