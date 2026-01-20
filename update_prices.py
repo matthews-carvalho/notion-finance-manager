@@ -116,10 +116,10 @@ def get_net_workdays(start_date, end_date) -> int:
     # Se usar numpy: return np.busday_count(start_date, end_date)
     # Implementação simples com loop (para volumes pequenos de dados é ok):
     days = 0
-    current = start_date
-    while current < end_date:
-        current += timedelta(days=1)
-        if current.weekday() < 5 and current not in br_holidays:
+    current_date = start_date
+    while current_date < end_date:
+        current_date += timedelta(days=1)
+        if current_date.weekday() < 5 and current_date not in br_holidays:
             days += 1
     return days
 
