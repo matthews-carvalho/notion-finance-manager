@@ -39,8 +39,11 @@ FI_LAST_UPDATE = "Last Update" # Data da última atualização
 FI_INVESTMENT_DATE = "Investment Date" # Data da compra
 FI_DUE_DATE = "Due Date" # Data de vencimento
 FI_INFLATION = "Inflation" # Inflação (IPCA)
+FI_LAST_AMOUNT_INVESTED = "Last Amount Invested"
+FI_AMOUNT_INVESTED = "Amount Invested"
 
 br_holidays = holidays.country_holidays('BR')
+BUSY_DAYS_IN_YEAR = 252
 
 notion_headers = {
     "Authorization": f"Bearer {NOTION_TOKEN}",
@@ -503,10 +506,6 @@ def update_fixed_income_assets():
     log_and_print("Atualizando ativos de renda fixa...")
 
     today = date.today()
-    selic = get_selic_over()
-    
-    if selic is None:
-        log_and_print(f"Não foi possível obter Selic.", level="error")
 
     pages = get_assets_from_notion(FI_ASSETS_DATABASE_ID)
     if not pages:
@@ -518,68 +517,94 @@ def update_fixed_income_assets():
         page_id = page["id"]
 
         try:
+            # Indexadores
+            indexer = props[FI_INDEXER]["select"]["name"]
+            if not indexer:
+                log_and_print(f"Ativo {page_id} sem indexador. Pulando.")
+                continue            
+            indexer_pct = props[FI_INDEXER_PCT]["number"] or 1.0
+            fixed_rate = props[FI_ADDITIONAL_FIXED_RATE]["number"] or 0.0
+            
             # Datas
             if not props[FI_INVESTMENT_DATE]["rollup"]["date"]:
                 log_and_print(f"Ativo {page_id} sem data de investimento. Pulando.")
                 continue
-            investment_date_str = props[FI_INVESTMENT_DATE]["rollup"]["date"]["start"]
-            due_date_str = props[FI_DUE_DATE]["date"]["start"]
             last_update_str = props[FI_LAST_UPDATE]["date"]["start"] if props["Last Update"]["date"] else None
 
-            investment_date = parser.parse(investment_date_str).date()
-            due_date = parser.parse(due_date_str).date()
-            last_update = parser.parse(last_update_str).date() if last_update_str else investment_date
+            investment_date = parser.parse(props[FI_INVESTMENT_DATE]["rollup"]["date"]["start"]).date()
+            due_date = parser.parse(props[FI_DUE_DATE]["date"]["start"]).date()
+            start_date = parser.parse(last_update_str).date() if last_update_str else investment_date
 
-            end_date = min(today, due_date)
-            if last_update >= end_date:
+            if start_date >= today:
                 log_and_print(f"Ativo {page_id} já atualizado. Pulando.")
                 continue
-
-            days = (end_date - last_update).days
-            if days <= 0:
-                continue
+            
+            end_date = min(today, due_date) if due_date else today
             
             # Valores Base
-            total_invested = props[FI_TOTAL_INVESTED]["rollup"]["number"] or 0
-            total_withdrawn = props[FI_TOTAL_WITHDRAWN]["rollup"]["number"] or 0
             balance = props[FI_BALANCE]["number"] or 0
+            amount_invested = props[FI_AMOUNT_INVESTED]["formula"]["number"] or 0
+            last_amount_invested = props[FI_LAST_AMOUNT_INVESTED]["number"] or 0
             
-            principal = balance if balance > 0 else (total_invested - total_withdrawn)
-            if principal <= 0:
-                log_and_print(f"Ativo {page_id} sem saldo. Pulando.")
-                continue
-    
-            # Indexadores
-            indexer = props[FI_INDEXER]["select"]["name"]
-            indexer_pct = props[FI_INDEXER_PCT]["number"] or 1.0
-            fixed_rate = props[FI_ADDITIONAL_FIXED_RATE]["number"] or 0.0
-
-            # Cálculo
-            new_balance = principal
+            if last_update_str is None:
+                # Primeiro cálculo do ativo
+                balance = amount_invested
+                last_amount_invested = amount_invested
             
-            if indexer in ("SELIC", "CDI") and selic is not None:
-                base_rate = selic if indexer == "SELIC" else max(selic - 0.001, 0)
-                annual_rate = base_rate * indexer_pct + fixed_rate
-                daily_rate = (1 + annual_rate) ** (1 / 252) - 1
-                new_balance *= ((1 + daily_rate) ** days)
-
-            elif indexer == "IPCA":
-                ipca_acc = get_ipca_accumulated(last_update, end_date) or 0
-                if ipca_acc:
-                    new_balance *= (1 + ipca_acc)
-
-                real_growth = (1 + fixed_rate) ** (days / 365)
-                new_balance *= real_growth
-
+            # Diferença positiva indica que houve aporte; diferença negativa indica que houve saque
+            diff = amount_invested - last_amount_invested
+            
+            adjusted_balance = balance
+            
+            if diff != 0:
+                log_and_print(f"Ativo {page_id}: Movimentação de capital detectada: R$ {diff:.2f}")
+                adjusted_balance += diff
+            
+            
+            if start_date >= end_date:
+                log_and_print(f"Ativo {page_id} vencido.")
+                new_balance = adjusted_balance
             else:
-                log_and_print(f"Indexador desconhecido: {indexer}", level="warning")
-                continue
+                factor = 1.0               
+                
+                if indexer in ("SELIC", "CDI"):
+                    interval_workdays = get_net_workdays(start_date, end_date)
+                    annual_rate = get_selic_over() if indexer == "SELIC" else get_cdi_rate()
+                    if annual_rate is None:
+                        log_and_print(f"Taxa anual do indexador '{indexer}' não econtrada. Pulando.", level="warning")
+                        continue
+                    
+                    daily_market_rate = (1 + annual_rate) ** (1 / BUSY_DAYS_IN_YEAR) - 1
+                    effective_daily_rate = daily_market_rate * indexer_pct
+                    
+                    # Adiciona Taxa Fixa (Spread) se houver (Ex: CDI + 5%)
+                    daily_spread = 0
+                    if fixed_rate > 0:
+                        daily_spread = (1 + fixed_rate) ** (1 / BUSY_DAYS_IN_YEAR) - 1
+                    
+                    total_daily_factor = (1 + effective_daily_rate) * (1 + daily_spread)
+                    
+                    # Juros compostos pelos dias passados
+                    factor = total_daily_factor ** interval_workdays
+                    
+                elif indexer == "IPCA":
+                    interval_workdays = get_net_workdays(investment_date, end_date)
+                    acc_ipca = get_accumulated_ipca(investment_date, end_date)
+                    real_factor = (1 + fixed_rate) ** (interval_workdays / BUSY_DAYS_IN_YEAR)                   
+                    factor = (1 + acc_ipca) * real_factor
 
+                else:
+                    log_and_print(f"Indexador desconhecido: {indexer}", level="warning")
+                    continue
+                
+                new_balance = adjusted_balance * factor
+                    
             # Atualiza Notion
             update_url = f"https://api.notion.com/v1/pages/{page_id}"
             payload = {
                 "properties": {
                     FI_BALANCE: {"number": round(new_balance, 2)},
+                    FI_LAST_AMOUNT_INVESTED: {"number": round(amount_invested, 2)},
                     FI_LAST_UPDATE: {"date": {"start": datetime.now().isoformat()}}
                 }
             }
@@ -587,7 +612,7 @@ def update_fixed_income_assets():
             resp = requests.patch(update_url, headers=notion_headers, json=payload, timeout=20)
             resp.raise_for_status()
 
-            log_and_print(f"Renda fixa atualizada: {round(new_balance, 2)}")
+            log_and_print(f"Renda fixa atualizada: {round(adjusted_balance, 2)} -> {round(new_balance, 2)}")
 
         except Exception as e:
             log_and_print(f"Erro ao atualizar renda fixa {page_id}: {e}", level="error")
