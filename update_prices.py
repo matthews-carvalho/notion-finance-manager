@@ -342,10 +342,10 @@ def update_variable_income_asset_price_in_notion(page_id, price):
     except Exception as e:
         log_and_print(f"Erro ao atualizar preço no Notion para {page_id}: {e}", level='error')
 
-def update_variable_income_assets():
+def update_variable_income_assets(database_id):
     log_and_print("Atualizando valores dos ativos de renda variável...")
     # Atualiza valor dos ativos de renda variável
-    pages = get_assets_from_notion(VI_ASSETS_DATABASE_ID)
+    pages = get_assets_from_notion(database_id)
 
     if not pages:
         log_and_print("Nenhum ativo encontrado ou erro na consulta!", level='warning')
@@ -577,7 +577,9 @@ def update_fixed_income_assets():
 def main():
     log_and_print("Iniciando atualização de investimentos...")
     
-    #update_variable_income_assets()
+    update_variable_income_assets(VI_ASSETS_DATABASE_ID)
+    
+    update_variable_income_assets(VI_FOREIGN_ASSETS_DATABASE_ID)
 
     update_fixed_income_assets()
     
