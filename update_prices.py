@@ -269,20 +269,17 @@ def get_from_brapi(ticker) -> Optional[float]:
 
 def get_from_eod(ticker) -> Optional[float]:
     try:
-        # tenta primeiro Brasil (.SA) se parecer B3
-        query_ticker = ticker
-        if ticker[-2:].isalpha() and not "." in ticker:
-            query_ticker = f"{ticker}.SA"
-        url = f"https://eodhistoricaldata.com/api/real-time/{query_ticker}?api_token={EOD_HISTORICAL_DATA_API_TOKEN}"
+        url = f"https://eodhistoricaldata.com/api/eod/{ticker}?api_token={EOD_HISTORICAL_DATA_API_TOKEN}&fmt=json"
         resp = requests.get(url, timeout=10)
         resp.raise_for_status()
         data = resp.json()
-        # depende do formato JSON, mas normalmente:
-        if "close" in data and data["close"]:
-            return float(data["close"])
-        # fallback para price
-        if "price" in data and data["price"]:
-            return float(data["price"])
+        if not data:
+            log_and_print("EOD retornou lista vazia")
+            return None
+        last = data[-1]
+        price = last.get("close")
+        if price:
+            return float(price)
     except Exception as e:
         log_and_print(f"Erro EOD Historical para {ticker}: {e}", level='error')
     return None
