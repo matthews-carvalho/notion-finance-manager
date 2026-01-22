@@ -12,6 +12,7 @@ load_dotenv() # Carrega variáveis de ambiente do arquivo .env
 # CONFIGURAÇÕES ----------------------
 NOTION_TOKEN = os.getenv('NOTION_TOKEN')
 VI_ASSETS_DATABASE_ID = os.getenv('VI_ASSETS_DATABASE_ID')
+VI_FOREIGN_ASSETS_DATABASE_ID = os.getenv('VI_FOREIGN_ASSETS_DATABASE_ID')
 FI_ASSETS_DATABASE_ID = os.getenv('FI_ASSETS_DATABASE_ID')
 TWELVE_DATA_API_KEY = os.getenv('TWELVE_DATA_API_KEY')
 YAHOO_FINANCE_API_KEY = os.getenv('YAHOO_FINANCE_API_KEY')
@@ -60,7 +61,7 @@ logging.basicConfig(
 # -------------------------------------
 
 # Valida se as variáveis de ambiente foram carregadas
-if not all([NOTION_TOKEN, TWELVE_DATA_API_KEY, YAHOO_FINANCE_API_KEY, BRAPI_TOKEN, VI_ASSETS_DATABASE_ID, FI_ASSETS_DATABASE_ID, EOD_HISTORICAL_DATA_API_TOKEN, ALPHA_VANTAGE_API_KEY, FINNHUB_API_KEY]):
+if not all([NOTION_TOKEN, TWELVE_DATA_API_KEY, YAHOO_FINANCE_API_KEY, BRAPI_TOKEN, VI_ASSETS_DATABASE_ID, VI_FOREIGN_ASSETS_DATABASE_ID, FI_ASSETS_DATABASE_ID, EOD_HISTORICAL_DATA_API_TOKEN, ALPHA_VANTAGE_API_KEY, FINNHUB_API_KEY]):
     message = "Erro: Uma ou mais variáveis de ambiente não foram definidas. Verifique seu arquivo .env."
     print(message)
     logging.critical(message)
