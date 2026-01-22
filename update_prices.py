@@ -450,31 +450,37 @@ def get_cdi_rate() -> Optional[float]:
 
 def get_accumulated_ipca(purchase_date: date, end_date: date) -> float:
     """Calcula o IPCA acumulado (composto) entre purchase_date e end_date"""
+    # Força o dia 1 para garantir que a API retorne o índice do mês da compra
+    # O BCB registra o IPCA sempre no dia 01/MM/AAAA
+    start_query = purchase_date.replace(day=1)
+    
     url = (
         f"https://api.bcb.gov.br/dados/serie/bcdata.sgs.433/dados?"
-        f"dataInicial={purchase_date.strftime('%d/%m/%Y')}&"
+        f"dataInicial={start_query.strftime('%d/%m/%Y')}&"
         f"dataFinal={end_date.strftime('%d/%m/%Y')}&formato=json"
     )
     try:
-        response = requests.get(url, timeout=10)
-        if response.status_code == 404:
-            print(f"Nenhum dado IPCA disponível entre {purchase_date} e {end_date}. Retornando 0.")
+        response = requests.get(url, timeout=10)      
+        # Tratamento para quando não há dados (ex: data muito recente onde o IPCA ainda não saiu)
+        if response.status_code == 404 or not response.json():
+            # Se for data recente (ex: mês atual), é normal não ter IPCA ainda.
+            print(f"Nenhum dado IPCA disponível entre {start_query} e {end_date}. Retornando 0.")
             return 0.0
         response.raise_for_status()
         data = response.json()
         
         if not data:
-            print(f"Sem dados IPCA entre {purchase_date} e {end_date}. Retornando 0.")
+            print(f"Sem dados IPCA entre {start_query} e {end_date}. Retornando 0.")
             return 0.0
 
-        acumulado = 1.0
+        accumulated = 1.0
         for d in data:
-            valor = float(d["valor"].replace(",", "."))
-            acumulado *= (1 + valor / 100)
+            value = float(d["valor"].replace(",", "."))
+            accumulated *= (1 + value / 100)
 
-        return acumulado - 1  # retorna em decimal
+        return accumulated - 1  # retorna em decimal
     except Exception as e:
-        print(f"Erro ao buscar IPCA acumulado ({purchase_date} → {end_date}): {e}")
+        print(f"Erro ao buscar IPCA acumulado ({start_query} → {end_date}): {e}")
         return 0.0
 
 # ---------------- FUNÇÕES RENDA FIXA -------------------
@@ -598,9 +604,9 @@ def update_fixed_income_assets():
 def main():
     log_and_print("Iniciando atualização de investimentos...")
     
-    update_variable_income_assets(VI_ASSETS_DATABASE_ID)
+    #update_variable_income_assets(VI_ASSETS_DATABASE_ID)
     
-    update_variable_income_assets(VI_FOREIGN_ASSETS_DATABASE_ID)
+    #update_variable_income_assets(VI_FOREIGN_ASSETS_DATABASE_ID)
 
     update_fixed_income_assets()
     
