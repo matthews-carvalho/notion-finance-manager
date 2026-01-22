@@ -389,7 +389,7 @@ def update_variable_income_assets(database_id):
 
         if price:
             update_variable_income_asset_price_in_notion(page_id, price)
-            log_and_print(f"Preço atualizado: {ticker} -> {price}")
+            log_and_print(f"Preço atualizado: {ticker} -> R${price}")
         else:
             log_and_print(f"Não foi possível atualizar {ticker}.", level='warning')
 
