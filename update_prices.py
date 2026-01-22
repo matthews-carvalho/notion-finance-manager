@@ -6,6 +6,7 @@ import os
 from dotenv import load_dotenv
 import holidays
 from typing import Optional, Tuple
+import re
 
 load_dotenv() # Carrega variáveis de ambiente do arquivo .env
 
@@ -149,6 +150,16 @@ def extract_asset_name_from_title(page) -> Optional[str]:
     except Exception as e:
         log_and_print(f"Erro ao extrair título da página: {e}", level='error')
         return None
+    
+def is_brazilian_ticker(ticker: str) -> bool:
+    if not ticker:
+        return False
+
+    ticker = ticker.upper().strip()
+
+    pattern = r"^[A-Z0-9]{4}\d{1,2}$"
+    return bool(re.match(pattern, ticker))    
+
 # ---------------- FUNÇÕES RENDA VARIÁVEL -------------------
 
 def get_price_from_apis(ticker) -> Optional[float]:
@@ -156,9 +167,22 @@ def get_price_from_apis(ticker) -> Optional[float]:
 
     # 1) EOD Historical Data (forte global + BR)
     log_and_print("Buscando preço no EOD Historical Data...")
-    price = get_from_eod(ticker)
-    if price:
-        return price
+    eod_variations = []
+    
+    # Se parecer um ticker brasileiro, adiciona .SA
+    if is_brazilian_ticker(ticker):
+        eod_variations.append(f"{ticker}.SA")
+    
+    # Adiciona variação com .US
+    eod_variations.append(f"{ticker}.US")
+    
+    # Adiciona variação sem sufixo
+    eod_variations.append(ticker)
+    
+    for eod_ticker in eod_variations:
+        price = get_from_eod(eod_ticker)
+        if price:
+            return price
 
     # 2) BRAPI (forte para Brasil)
     log_and_print(f"EOD Historical Data não encontrou {ticker}, tentando BRAPI...")
@@ -190,15 +214,15 @@ def get_price_from_apis(ticker) -> Optional[float]:
         (ticker, "US"),  # Tenta primeiro com o ticker original (US)
     ]
     
-    # Se parecer um ticker brasileiro (últimos 2 chars são letras e não tem ponto), adiciona .SA
-    if len(ticker) >= 2 and ticker[-2:].isalpha() and "." not in ticker:
+    # Se parecer um ticker brasileiro, adiciona .SA
+    if is_brazilian_ticker(ticker):
         yahoo_variations.append((f"{ticker}.SA", "BR"))
     
     # Adiciona variação com .US
     yahoo_variations.append((f"{ticker}.US", "US"))
     
-    for yahoo_ticker, region in yahoo_variations:
-        price = get_from_yahoo_finance(yahoo_ticker, region=region)
+    for eod_ticker, region in yahoo_variations:
+        price = get_from_yahoo_finance(eod_ticker, region=region)
         if price:
             return price
 
