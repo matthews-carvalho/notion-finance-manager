@@ -520,7 +520,7 @@ def update_fixed_income_assets():
             last_update_str = props[FI_LAST_UPDATE]["date"]["start"] if props["Last Update"]["date"] else None
 
             investment_date = parser.parse(props[FI_INVESTMENT_DATE]["rollup"]["date"]["start"]).date()
-            due_date = parser.parse(props[FI_DUE_DATE]["date"]["start"]).date()
+            due_date = parser.parse(props[FI_DUE_DATE]["date"]["start"]).date() if props[FI_DUE_DATE]["date"] else None
             start_date = parser.parse(last_update_str).date() if last_update_str else investment_date
 
             if start_date >= today:
@@ -609,9 +609,9 @@ def update_fixed_income_assets():
 def main():
     log_and_print("Iniciando atualização de investimentos...")
     
-    #update_variable_income_assets(VI_ASSETS_DATABASE_ID)
+    update_variable_income_assets(VI_ASSETS_DATABASE_ID)
     
-    #update_variable_income_assets(VI_FOREIGN_ASSETS_DATABASE_ID)
+    update_variable_income_assets(VI_FOREIGN_ASSETS_DATABASE_ID)
 
     update_fixed_income_assets()
     
