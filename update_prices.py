@@ -501,10 +501,13 @@ def update_fixed_income_assets():
 
         try:
             # Indexadores
-            indexer = props[FI_INDEXER]["select"]["name"]
-            if not indexer:
+            indexer_rollup = props[FI_INDEXER]["rollup"]["array"]
+            if not indexer_rollup:
                 log_and_print(f"Ativo {page_id} sem indexador. Pulando.")
-                continue            
+                continue  
+            else:
+                indexer = indexer_rollup[0]["select"]["name"]
+          
             indexer_pct = props[FI_INDEXER_PCT]["number"] or 1.0
             fixed_rate = props[FI_ADDITIONAL_FIXED_RATE]["number"] or 0.0
             
