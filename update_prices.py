@@ -600,7 +600,7 @@ def update_fixed_income_assets():
             resp = requests.patch(update_url, headers=notion_headers, json=payload, timeout=20)
             resp.raise_for_status()
 
-            log_and_print(f"Renda fixa atualizada: {round(adjusted_balance, 2)} -> {round(new_balance, 2)}")
+            log_and_print(f"Renda fixa atualizada: R${round(adjusted_balance, 2)} -> R${round(new_balance, 2)}")
 
         except Exception as e:
             log_and_print(f"Erro ao atualizar renda fixa {page_id}: {e}", level="error")
