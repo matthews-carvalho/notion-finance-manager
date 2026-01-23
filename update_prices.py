@@ -489,6 +489,8 @@ def update_fixed_income_assets():
     log_and_print("Atualizando ativos de renda fixa...")
 
     today = date.today()
+    selic = get_selic_over()
+    cdi = get_cdi_rate()
 
     pages = get_assets_from_notion(FI_ASSETS_DATABASE_ID)
     if not pages:
@@ -555,7 +557,7 @@ def update_fixed_income_assets():
                 
                 if indexer in ("SELIC", "CDI"):
                     interval_workdays = get_net_workdays(start_date, end_date)
-                    annual_rate = get_selic_over() if indexer == "SELIC" else get_cdi_rate()
+                    annual_rate = selic if indexer == "SELIC" else cdi
                     if annual_rate is None:
                         log_and_print(f"Taxa anual do indexador '{indexer}' não econtrada. Pulando.", level="warning")
                         continue
