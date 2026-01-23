@@ -508,7 +508,7 @@ def update_fixed_income_assets():
                 log_and_print(f"Ativo {page_id} sem indexador. Pulando.")
                 continue  
             else:
-                indexer = indexer_rollup[0]["select"]["name"]
+                indexer = indexer_rollup[0]["select"]["name"].upper()
           
             indexer_pct = props[FI_INDEXER_PCT]["number"] or 1.0
             fixed_rate = props[FI_ADDITIONAL_FIXED_RATE]["number"] or 0.0
