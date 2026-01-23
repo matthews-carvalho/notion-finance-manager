@@ -510,7 +510,7 @@ def update_fixed_income_assets():
             else:
                 indexer = indexer_rollup[0]["select"]["name"].upper()
           
-            indexer_pct = props[FI_INDEXER_PCT]["number"] or 1.0
+            indexer_pct = props[FI_INDEXER_PCT]["rollup"]["number"] or 1.0
             fixed_rate = props[FI_ADDITIONAL_FIXED_RATE]["number"] or 0.0
             
             # Datas
@@ -520,7 +520,16 @@ def update_fixed_income_assets():
             last_update_str = props[FI_LAST_UPDATE]["date"]["start"] if props["Last Update"]["date"] else None
 
             investment_date = parser.parse(props[FI_INVESTMENT_DATE]["rollup"]["date"]["start"]).date()
-            due_date = parser.parse(props[FI_DUE_DATE]["date"]["start"]).date() if props[FI_DUE_DATE]["date"] else None
+            due_date = None
+
+            rollup = props.get[FI_DUE_DATE]["rollup"]
+            items = rollup["array"]
+
+            if items:
+                date_obj = items[0]["date"]
+                if date_obj and date_obj["start"]:
+                    due_date = parser.parse(date_obj["start"]).date()
+
             start_date = parser.parse(last_update_str).date() if last_update_str else investment_date
 
             if start_date >= today:
