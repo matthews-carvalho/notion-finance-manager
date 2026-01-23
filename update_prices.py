@@ -522,7 +522,7 @@ def update_fixed_income_assets():
             investment_date = parser.parse(props[FI_INVESTMENT_DATE]["rollup"]["date"]["start"]).date()
             due_date = None
 
-            rollup = props.get[FI_DUE_DATE]["rollup"]
+            rollup = props[FI_DUE_DATE]["rollup"]
             items = rollup["array"]
 
             if items:
