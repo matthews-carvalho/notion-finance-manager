@@ -14,7 +14,7 @@ load_dotenv() # Carrega variáveis de ambiente do arquivo .env
 NOTION_TOKEN = os.getenv('NOTION_TOKEN')
 VI_ASSETS_DATABASE_ID = os.getenv('VI_ASSETS_DATABASE_ID')
 VI_FOREIGN_ASSETS_DATABASE_ID = os.getenv('VI_FOREIGN_ASSETS_DATABASE_ID')
-FI_ASSETS_DATABASE_ID = os.getenv('FI_ASSETS_DATABASE_ID')
+FI_CONTRACTS_DATABASE_ID = os.getenv('FI_CONTRACTS_DATABASE_ID')
 TWELVE_DATA_API_KEY = os.getenv('TWELVE_DATA_API_KEY')
 YAHOO_FINANCE_API_KEY = os.getenv('YAHOO_FINANCE_API_KEY')
 BRAPI_TOKEN = os.getenv('BRAPI_TOKEN')
@@ -62,7 +62,7 @@ logging.basicConfig(
 # -------------------------------------
 
 # Valida se as variáveis de ambiente foram carregadas
-if not all([NOTION_TOKEN, TWELVE_DATA_API_KEY, YAHOO_FINANCE_API_KEY, BRAPI_TOKEN, VI_ASSETS_DATABASE_ID, VI_FOREIGN_ASSETS_DATABASE_ID, FI_ASSETS_DATABASE_ID, EOD_HISTORICAL_DATA_API_TOKEN, ALPHA_VANTAGE_API_KEY, FINNHUB_API_KEY]):
+if not all([NOTION_TOKEN, TWELVE_DATA_API_KEY, YAHOO_FINANCE_API_KEY, BRAPI_TOKEN, VI_ASSETS_DATABASE_ID, VI_FOREIGN_ASSETS_DATABASE_ID, FI_CONTRACTS_DATABASE_ID, EOD_HISTORICAL_DATA_API_TOKEN, ALPHA_VANTAGE_API_KEY, FINNHUB_API_KEY]):
     message = "Erro: Uma ou mais variáveis de ambiente não foram definidas. Verifique seu arquivo .env."
     print(message)
     logging.critical(message)
@@ -125,7 +125,7 @@ def get_net_workdays(start_date, end_date) -> int:
             days += 1
     return days
 
-def get_assets_from_notion(DATABASE_ID) -> Optional[list]:
+def get_pages_from_notion(DATABASE_ID) -> Optional[list]:
     try:
         url = f"https://api.notion.com/v1/databases/{DATABASE_ID}/query"
         response = requests.post(url, headers=notion_headers, timeout=20)
@@ -366,7 +366,7 @@ def update_variable_income_asset_price_in_notion(page_id, price):
 def update_variable_income_assets(database_id):
     log_and_print("Atualizando valores dos ativos de renda variável...")
     # Atualiza valor dos ativos de renda variável
-    pages = get_assets_from_notion(database_id)
+    pages = get_pages_from_notion(database_id)
 
     if not pages:
         log_and_print("Nenhum ativo encontrado ou erro na consulta!", level='warning')
@@ -485,14 +485,14 @@ def get_accumulated_ipca(purchase_date: date, end_date: date) -> float:
 
 # ---------------- FUNÇÕES RENDA FIXA -------------------
 
-def update_fixed_income_assets():
+def update_fixed_income_contracts():
     log_and_print("Atualizando ativos de renda fixa...")
 
     today = date.today()
     selic = get_selic_over()
     cdi = get_cdi_rate()
 
-    pages = get_assets_from_notion(FI_ASSETS_DATABASE_ID)
+    pages = get_pages_from_notion(FI_CONTRACTS_DATABASE_ID)
     if not pages:
         log_and_print("Nenhum ativo de renda fixa encontrado.", level="warning")
         return
@@ -622,7 +622,7 @@ def main():
     
     update_variable_income_assets(VI_FOREIGN_ASSETS_DATABASE_ID)
 
-    update_fixed_income_assets()
+    update_fixed_income_contracts()
     
     log_and_print("Atualização concluída.")
 
