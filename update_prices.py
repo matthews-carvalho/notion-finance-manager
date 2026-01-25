@@ -15,6 +15,8 @@ NOTION_TOKEN = os.getenv('NOTION_TOKEN')
 VI_ASSETS_DATABASE_ID = os.getenv('VI_ASSETS_DATABASE_ID')
 VI_FOREIGN_ASSETS_DATABASE_ID = os.getenv('VI_FOREIGN_ASSETS_DATABASE_ID')
 FI_CONTRACTS_DATABASE_ID = os.getenv('FI_CONTRACTS_DATABASE_ID')
+FI_CONTRIBUTIONS_DATABASE_ID = os.getenv('FI_CONTRIBUTIONS_DATABASE_ID')
+FI_ASSETS_DATABASE_ID = os.getenv('FI_ASSETS_DATABASE_ID')
 TWELVE_DATA_API_KEY = os.getenv('TWELVE_DATA_API_KEY')
 YAHOO_FINANCE_API_KEY = os.getenv('YAHOO_FINANCE_API_KEY')
 BRAPI_TOKEN = os.getenv('BRAPI_TOKEN')
@@ -43,6 +45,14 @@ FI_DUE_DATE = "Due Date" # Data de vencimento
 FI_INFLATION = "Inflation" # Inflação (IPCA)
 FI_LAST_AMOUNT_INVESTED = "Last Amount Invested"
 FI_AMOUNT_INVESTED = "Amount Invested"
+
+# Propriedades dos aportes de renda fixa
+FIC_ASSET = "Asset"                     # Relation → Fixed Income Assets
+FIC_CONTRACT = "Contract"               # Relation → Fixed Income Contracts
+FIC_AMOUNT = "Amount"                   # Number
+FIC_DATE = "Date"                       # Date
+FIC_ADDITIONAL_FIXED_RATE = "Additional Fixed Rate"  # Number
+FIC_CONTRIBUTION_REL = "Fixed Income Contributions"  # Relation
 
 br_holidays = holidays.country_holidays('BR')
 BUSY_DAYS_IN_YEAR = 252
@@ -613,6 +623,114 @@ def update_fixed_income_contracts():
 
         except Exception as e:
             log_and_print(f"Erro ao atualizar renda fixa {page_id}: {e}", level="error")
+
+def get_unlinked_fixed_income_contributions():
+    """
+    Retorna aportes de renda fixa que ainda não possuem contrato vinculado
+    """
+    url = f"https://api.notion.com/v1/databases/{FI_CONTRIBUTIONS_DATABASE_ID}/query"
+
+    payload = {
+        "filter": {
+            "property": FIC_CONTRACT,
+            "relation": {
+                "is_empty": True
+            }
+        }
+    }
+
+    response = requests.post(url, headers=notion_headers, json=payload, timeout=20)
+    response.raise_for_status()
+    data = response.json()
+    pages = data["results"]
+    return pages
+
+def create_contract_from_contribution(contribution_page):
+    props = contribution_page["properties"]
+    contribution_id = contribution_page["id"]
+
+    # --- Validações básicas ---
+    if not props[FIC_ASSET]["relation"]:
+        raise ValueError("Aporte sem ativo vinculado")
+
+    asset_id = props[FIC_ASSET]["relation"][0]["id"]
+    amount = props[FIC_AMOUNT]["number"]
+    contribution_date = parser.parse(
+        props[FIC_DATE]["date"]["start"]
+    ).date()
+
+    additional_fixed_rate = props[FIC_ADDITIONAL_FIXED_RATE]["number"] or 0.0
+
+    # --- Criação do contrato ---
+    payload = {
+        "parent": {
+            "database_id": FI_CONTRACTS_DATABASE_ID
+        },
+        "properties": {
+            "Name": {
+                "title": [
+                    {
+                        "text": {
+                            "content": f"Contract {contribution_date.strftime('%Y-%m-%d')}"
+                        }
+                    }
+                ]
+            },
+            "Asset": {
+                "relation": [{"id": asset_id}]
+            },
+            FIC_CONTRIBUTION_REL: {
+                "relation": [{"id": contribution_id}]
+            },
+            FI_CONTRIBUTION_DATE: {
+                "date": {"start": contribution_date.isoformat()}
+            },
+            FI_ADDITIONAL_FIXED_RATE: {
+                "number": additional_fixed_rate
+            }
+            # ,
+            # FI_AMOUNT_INVESTED: {
+            #     "number": amount
+            # },
+            # FI_BALANCE: {
+            #     "number": amount
+            # },
+            # FI_LAST_AMOUNT_INVESTED: {
+            #     "number": amount
+            # }
+        }
+    }
+
+    response = requests.post(
+        "https://api.notion.com/v1/pages",
+        headers=notion_headers,
+        json=payload,
+        timeout=20
+    )
+    response.raise_for_status()
+
+def process_fixed_income_contributions():
+    log_and_print("Processando aportes de renda fixa...")
+
+    contributions = get_unlinked_fixed_income_contributions()
+
+    if not contributions:
+        log_and_print("Nenhum aporte novo para processar.")
+        return
+
+    for contribution in contributions:
+        try:
+            create_contract_from_contribution(contribution)
+
+            log_and_print(
+                f"Contrato criado e vinculado com sucesso para aporte {contribution['id']}"
+            )
+
+        except Exception as e:
+            log_and_print(
+                f"Erro ao processar aporte {contribution['id']}: {e}",
+                level="error"
+            )
 
 
 def main():
