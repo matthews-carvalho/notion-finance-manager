@@ -29,7 +29,7 @@ VI_TYPE = 'Type'
 VI_UNIT_PRICE = 'Unit Price'
 VI_UPDATE_DATE = 'Last Update'
 
-# Propriedades dos ativos de renda fixa
+# Propriedades dos contratos de renda fixa
 FI_TYPE = "Type" # Tipo de investimento (CDB, LCI, Tesouro Direto, etc)
 FI_INDEXER = "Indexer" # Indexador (Selic, IPCA, CDI)
 FI_INDEXER_PCT = "Indexer %" # Percentual do indexador (ex: 100% do CDI)
@@ -38,7 +38,7 @@ FI_BALANCE = "Balance" # Saldo atual com juros compostos
 FI_TOTAL_INVESTED = "Total Invested" # Total investido
 FI_TOTAL_WITHDRAWN = "Total Withdrawn" # Total sacado
 FI_LAST_UPDATE = "Last Update" # Data da última atualização
-FI_INVESTMENT_DATE = "Investment Date" # Data da compra
+FI_CONTRIBUTION_DATE = "Contribution Date" # Data da compra
 FI_DUE_DATE = "Due Date" # Data de vencimento
 FI_INFLATION = "Inflation" # Inflação (IPCA)
 FI_LAST_AMOUNT_INVESTED = "Last Amount Invested"
@@ -514,12 +514,12 @@ def update_fixed_income_contracts():
             fixed_rate = props[FI_ADDITIONAL_FIXED_RATE]["number"] or 0.0
             
             # Datas
-            if not props[FI_INVESTMENT_DATE]["rollup"]["date"]:
-                log_and_print(f"Ativo {page_id} sem data de investimento. Pulando.")
+            if not props[FI_CONTRIBUTION_DATE]["rollup"]["date"]:
+                log_and_print(f"Ativo {page_id} sem data de aporte. Pulando.")
                 continue
             last_update_str = props[FI_LAST_UPDATE]["date"]["start"] if props["Last Update"]["date"] else None
 
-            investment_date = parser.parse(props[FI_INVESTMENT_DATE]["rollup"]["date"]["start"]).date()
+            contribution_date = parser.parse(props[FI_CONTRIBUTION_DATE]["rollup"]["date"]["start"]).date()
             due_date = None
 
             rollup = props[FI_DUE_DATE]["rollup"]
@@ -530,7 +530,7 @@ def update_fixed_income_contracts():
                 if date_obj and date_obj["start"]:
                     due_date = parser.parse(date_obj["start"]).date()
 
-            start_date = parser.parse(last_update_str).date() if last_update_str else investment_date
+            start_date = parser.parse(last_update_str).date() if last_update_str else contribution_date
 
             if start_date >= today:
                 log_and_print(f"Ativo {page_id} já atualizado. Pulando.")
@@ -585,8 +585,8 @@ def update_fixed_income_contracts():
                     factor = total_daily_factor ** interval_workdays
                     
                 elif indexer == "IPCA":
-                    interval_workdays = get_net_workdays(investment_date, end_date)
-                    acc_ipca = get_accumulated_ipca(investment_date, end_date)
+                    interval_workdays = get_net_workdays(contribution_date, end_date)
+                    acc_ipca = get_accumulated_ipca(contribution_date, end_date)
                     real_factor = (1 + fixed_rate) ** (interval_workdays / BUSY_DAYS_IN_YEAR)                   
                     factor = (1 + acc_ipca) * real_factor
 
