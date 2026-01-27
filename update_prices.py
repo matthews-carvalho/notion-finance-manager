@@ -17,6 +17,8 @@ VI_FOREIGN_ASSETS_DATABASE_ID = os.getenv('VI_FOREIGN_ASSETS_DATABASE_ID')
 FI_CONTRACTS_DATABASE_ID = os.getenv('FI_CONTRACTS_DATABASE_ID')
 FI_CONTRIBUTIONS_DATABASE_ID = os.getenv('FI_CONTRIBUTIONS_DATABASE_ID')
 FI_ASSETS_DATABASE_ID = os.getenv('FI_ASSETS_DATABASE_ID')
+FI_WITHDRAWALS_DATABASE_ID = os.getenv('FI_WITHDRAWALS_DATABASE_ID')
+FI_ALLOCATIONS_DATABASE_ID = os.getenv('FI_ALLOCATIONS_DATABASE_ID')
 TWELVE_DATA_API_KEY = os.getenv('TWELVE_DATA_API_KEY')
 YAHOO_FINANCE_API_KEY = os.getenv('YAHOO_FINANCE_API_KEY')
 BRAPI_TOKEN = os.getenv('BRAPI_TOKEN')
@@ -32,19 +34,18 @@ VI_UNIT_PRICE = 'Unit Price'
 VI_UPDATE_DATE = 'Last Update'
 
 # Propriedades dos contratos de renda fixa
-FI_TYPE = "Type" # Tipo de investimento (CDB, LCI, Tesouro Direto, etc)
-FI_INDEXER = "Indexer" # Indexador (Selic, IPCA, CDI)
+FI_TYPE = "Type" # Tipo de investimento (Tesouro Direto, Renda Fixa, etc)
+FI_INDEXER = "Indexer" # Indexador (SELIC, IPCA, CDI)
 FI_INDEXER_PCT = "Indexer %" # Percentual do indexador (ex: 100% do CDI)
 FI_ADDITIONAL_FIXED_RATE = "Additional Fixed Rate" # Taxa fixa adicional (para IPCA+ ou pré-fixado)
 FI_BALANCE = "Balance" # Saldo atual com juros compostos
-FI_TOTAL_INVESTED = "Total Invested" # Total investido
-FI_TOTAL_WITHDRAWN = "Total Withdrawn" # Total sacado
+FI_VARIATION = "Variation" # Percentual de variação do saldo
 FI_LAST_UPDATE = "Last Update" # Data da última atualização
 FI_CONTRIBUTION_DATE = "Contribution Date" # Data da compra
 FI_DUE_DATE = "Due Date" # Data de vencimento
 FI_INFLATION = "Inflation" # Inflação (IPCA)
-FI_LAST_AMOUNT_INVESTED = "Last Amount Invested"
-FI_AMOUNT_INVESTED = "Amount Invested"
+FI_CLOSED = "Closed" # Fechado
+FI_CONTRACT_UNIQUE_ID = "ID" # Propriedade unique id on contracts (tie-breaker)
 
 # Propriedades dos aportes de renda fixa
 FIC_ASSET = "Asset"                     # Relation → Fixed Income Assets
@@ -52,7 +53,21 @@ FIC_CONTRACT = "Contract"               # Relation → Fixed Income Contracts
 FIC_AMOUNT = "Amount"                   # Number
 FIC_DATE = "Date"                       # Date
 FIC_ADDITIONAL_FIXED_RATE = "Additional Fixed Rate"  # Number
-FIC_CONTRIBUTION_REL = "Fixed Income Contributions"  # Relation
+FIC_CONTRIBUTION_REL = "Contribution"  # Relation
+
+# Propriedades da tabela de saques de renda fixa
+FIW_ASSET = "Asset"
+FIW_AMOUNT = "Amount"
+FIW_PROCESSED = "Processed"
+FIW_PROCESSING_DATE = "Processing Date"
+FIW_ALLOCATIONS_REL = "Allocations"
+FIW_PROCESSED_AMOUNT = "Processed Amount"
+
+# Propriedades de Allocation table
+FIA_WITHDRAWAL_REL = "Withdrawal"
+FIA_CONTRACT_REL = "Contract"
+FIA_AMOUNT = "Amount"
+FIA_OPERATION_DATE = "Date"
 
 br_holidays = holidays.country_holidays('BR')
 BUSY_DAYS_IN_YEAR = 252
@@ -701,14 +716,194 @@ def process_fixed_income_contributions():
                 level="error"
             )
 
+def get_unprocessed_withdrawals() -> list:
+    """
+    Retorna saques não processados (Processed checkbox == False)
+    """
+    url = f"https://api.notion.com/v1/databases/{FI_WITHDRAWALS_DATABASE_ID}/query"
+    payload = {
+        "filter": {
+            "property": FIW_PROCESSED,
+            "checkbox": {"equals": False}
+        }
+    }
+    response = requests.post(url, headers=notion_headers, json=payload, timeout=20)
+    response.raise_for_status()
+    data = response.json()
+    pages = data["results"]
+    return pages
+
+def get_contracts_lifo_for_asset(asset_id: str) -> list:
+    """
+    Busca contratos do asset ordenados por Contribution Date desc e ID desc (LIFO).
+    """
+    url = f"https://api.notion.com/v1/databases/{FI_CONTRACTS_DATABASE_ID}/query"
+
+    payload = {
+        "filter": {
+            "property": "Asset",
+            "relation": {"contains": asset_id}
+        },
+        "sorts": [
+            {"property": FI_CONTRIBUTION_DATE, "direction": "descending"},
+            {"property": FI_CONTRACT_UNIQUE_ID, "direction": "descending"}
+        ],
+        "page_size": 100
+    }
+
+    response = requests.post(url, headers=notion_headers, json=payload, timeout=30)
+    response.raise_for_status()
+    data = response.json()
+    pages = data["results"]
+    return pages
+
+
+def compute_withdrawal_allocations_for_asset(asset_id: str, amount: float) -> list:
+    """
+    Calcula (em memória) a lista de alocações (contract_id, deduction)
+    e verifica se há saldo suficiente. Não grava nada.
+    Retorna lista de dicts: [{"contract_id": id, "deduction": X}, ...]
+    """
+    contracts = get_contracts_lifo_for_asset(asset_id)
+    remaining = float(amount)
+    allocations = []
+
+    for contract in contracts:
+        if remaining <= 0:
+            break
+        balance = contract["properties"].get(FI_BALANCE, {}).get("number") or 0.0
+        if balance <= 0:
+            continue
+        deduct = min(balance, remaining)
+        allocations.append({"contract_id": contract["id"], "deduction": round(deduct, 2)})
+        remaining -= deduct
+
+    return allocations
+
+
+def create_allocation_record(withdrawal_id: str, contract_id: str, amount: float):
+    """
+    Cria um registro na tabela Withdrawal Allocations ligado ao saque e contrato.
+    Retorna allocation_id.
+    """
+    payload = {
+        "parent": {"database_id": FI_ALLOCATIONS_DATABASE_ID},
+        "properties": {
+            "Name": {
+                "title": [{"text": {"content": f"Allocation {withdrawal_id} -> {contract_id}"}}]
+            },
+            FIA_WITHDRAWAL_REL: {"relation": [{"id": withdrawal_id}]},
+            FIA_CONTRACT_REL: {"relation": [{"id": contract_id}]},
+            FIA_AMOUNT: {"number": round(amount, 2)},
+            FIA_OPERATION_DATE: {"date": {"start": datetime.now().isoformat()}}
+        }
+    }
+
+    response = requests.post("https://api.notion.com/v1/pages", headers=notion_headers, json=payload, timeout=20)
+    response.raise_for_status()
+    data = response.json()
+    allocation_id = data["id"]
+    return allocation_id
+
+def update_contract_balance_and_withdrawn(contract_id: str, deduction: float):
+    """
+    Subtrai deduction do Balance na página do contrato.
+    """
+    # Buscar a página atual para ler as propriedades
+    url_get = f"https://api.notion.com/v1/pages/{contract_id}"
+    resp_get = requests.get(url_get, headers=notion_headers, timeout=20)
+    resp_get.raise_for_status()
+    contract = resp_get.json()
+    props = contract["properties"]
+
+    current_balance = props.get(FI_BALANCE, {}).get("number") or 0.0
+
+    new_balance = round(max(0.0, current_balance - deduction), 2)
+
+    payload = {
+        "properties": {
+            FI_BALANCE: {"number": new_balance}
+        }
+    }
+    
+    # Apenas define FI_CLOSED como True quanto balance chegar a 0
+    if new_balance == 0:
+        payload["properties"][FI_CLOSED] = {"checkbox": True}
+
+    resp = requests.patch(f"https://api.notion.com/v1/pages/{contract_id}", headers=notion_headers, json=payload, timeout=20)
+    resp.raise_for_status()
+
+def link_withdrawal_to_allocations(withdrawal_id: str, allocation_ids: list, processed_amount: float):
+    """
+    Atualiza a página do saque para relacionar as alocações (campo Allocations), salvar data, valor processado e marca como processado.
+    """
+    url = f"https://api.notion.com/v1/pages/{withdrawal_id}"
+    payload = {
+        "properties": {
+            FIW_ALLOCATIONS_REL: {"relation": [{"id": aid} for aid in allocation_ids]},
+            FIW_PROCESSED: {"checkbox": True},
+            FIW_PROCESSED_AMOUNT: {"number": round(processed_amount, 2)},
+            FIW_PROCESSING_DATE: {"date": {"start": datetime.now().isoformat()}}
+        }
+    }
+    response = requests.patch(url, headers=notion_headers, json=payload, timeout=20)
+    response.raise_for_status()
+
+
+def process_withdrawals_lifo():
+    log_and_print("Processando saques (LIFO)...")
+    withdrawals = get_unprocessed_withdrawals()
+    if not withdrawals:
+        log_and_print("Nenhum saque não-processado.")
+        return
+
+    for wd in withdrawals:
+        try:
+            props = wd["properties"]
+            withdrawal_id = wd["id"]
+
+            if not props.get(FIW_ASSET, {}).get("relation"):
+                log_and_print(f"Saque {withdrawal_id} sem asset definido. Pulando.", level="warning")
+                continue
+
+            asset_id = props[FIW_ASSET]["relation"][0]["id"]
+            amount = props.get(FIW_AMOUNT, {}).get("number") or 0.0
+
+            # calcula alocações em memória e valida saldo
+            allocations = compute_withdrawal_allocations_for_asset(asset_id, amount)
+            
+            # calcula o valor processado total (antes do loop para garantir que está sempre definido)
+            processed_amount = round(sum(allocation["deduction"] for allocation in allocations), 2)
+
+            # Persiste: cria alocações e atualiza contratos
+            allocation_ids = []
+            for alloc in allocations:
+                contract_id = alloc["contract_id"]
+                deduct = alloc["deduction"]
+
+                # cria allocation record
+                alloc_id = create_allocation_record(withdrawal_id, contract_id, deduct)
+                allocation_ids.append(alloc_id)
+                
+                # atualiza contrato (balance e total withdrawn)
+                update_contract_balance_and_withdrawn(contract_id, deduct)
+            
+            # linka o saque às alocações e marca processed
+            link_withdrawal_to_allocations(withdrawal_id, allocation_ids, processed_amount)
+
+            log_and_print(f"Saque {withdrawal_id} processado com sucesso. Alocações: {allocation_ids}")
+
+        except Exception as e:
+            log_and_print(f"Erro ao processar saque {wd['id']}: {e}", level="error")
 
 def main():
     log_and_print("Iniciando atualização de investimentos...")
     
     update_variable_income_assets(VI_ASSETS_DATABASE_ID)
-    
     update_variable_income_assets(VI_FOREIGN_ASSETS_DATABASE_ID)
 
+    process_fixed_income_contributions()
+    process_withdrawals_lifo()
     update_fixed_income_contracts()
     
     log_and_print("Atualização concluída.")
