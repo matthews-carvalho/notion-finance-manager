@@ -663,17 +663,10 @@ def create_contract_from_contribution(contribution_page):
             },
             FI_ADDITIONAL_FIXED_RATE: {
                 "number": additional_fixed_rate
+            },
+            FI_BALANCE: {
+                "number": amount
             }
-            # ,
-            # FI_AMOUNT_INVESTED: {
-            #     "number": amount
-            # },
-            # FI_BALANCE: {
-            #     "number": amount
-            # },
-            # FI_LAST_AMOUNT_INVESTED: {
-            #     "number": amount
-            # }
         }
     }
 
