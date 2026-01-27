@@ -524,12 +524,12 @@ def update_fixed_income_contracts():
             fixed_rate = props[FI_ADDITIONAL_FIXED_RATE]["number"] or 0.0
             
             # Datas
-            if not props[FI_CONTRIBUTION_DATE]["rollup"]["date"]:
+            if not props[FI_CONTRIBUTION_DATE]["date"]:
                 log_and_print(f"Ativo {page_id} sem data de aporte. Pulando.")
                 continue
-            last_update_str = props[FI_LAST_UPDATE]["date"]["start"] if props["Last Update"]["date"] else None
+            last_update_str = props[FI_LAST_UPDATE]["date"]["start"] if props[FI_LAST_UPDATE]["date"] else None
 
-            contribution_date = parser.parse(props[FI_CONTRIBUTION_DATE]["rollup"]["date"]["start"]).date()
+            contribution_date = parser.parse(props[FI_CONTRIBUTION_DATE]["date"]["start"]).date()
             due_date = None
 
             rollup = props[FI_DUE_DATE]["rollup"]
@@ -551,8 +551,8 @@ def update_fixed_income_contracts():
             balance = props[FI_BALANCE]["number"] or 0
             
             if start_date >= end_date:
-                log_and_print(f"Ativo {page_id} vencido.")
-                new_balance = adjusted_balance
+                log_and_print(f"Ativo {page_id} vencido ou sem período para calcular.")
+                new_balance = balance
             else:
                 factor = 1.0               
                 
@@ -560,25 +560,20 @@ def update_fixed_income_contracts():
                     interval_workdays = get_net_workdays(start_date, end_date)
                     annual_rate = selic if indexer == "SELIC" else cdi
                     if annual_rate is None:
-                        log_and_print(f"Taxa anual do indexador '{indexer}' não econtrada. Pulando.", level="warning")
+                        log_and_print(f"Taxa anual do indexador '{indexer}' não encontrada. Pulando.", level="warning")
                         continue
                     
-                    daily_market_rate = (1 + annual_rate) ** (1 / BUSY_DAYS_IN_YEAR) - 1
-                    effective_daily_rate = daily_market_rate * indexer_pct
+                    # Calcula taxa efetiva anual: (indexer * percentual) + spread fixo
+                    # Ex: CDI 100% + 5% = (CDI * 1.0) + 0.05
+                    effective_annual_rate = (annual_rate * indexer_pct) + fixed_rate
                     
-                    # Adiciona Taxa Fixa (Spread) se houver (Ex: CDI + 5%)
-                    daily_spread = 0
-                    if fixed_rate > 0:
-                        daily_spread = (1 + fixed_rate) ** (1 / BUSY_DAYS_IN_YEAR) - 1
-                    
-                    total_daily_factor = (1 + effective_daily_rate) * (1 + daily_spread)
-                    
-                    # Juros compostos pelos dias passados
-                    factor = total_daily_factor ** interval_workdays
+                    # Converte taxa anual para fator diário e compõe pelos dias úteis
+                    daily_factor = (1 + effective_annual_rate) ** (1 / BUSY_DAYS_IN_YEAR)
+                    factor = daily_factor ** interval_workdays
                     
                 elif indexer == "IPCA":
-                    interval_workdays = get_net_workdays(contribution_date, end_date)
-                    acc_ipca = get_accumulated_ipca(contribution_date, end_date)
+                    interval_workdays = get_net_workdays(start_date, end_date)
+                    acc_ipca = get_accumulated_ipca(start_date, end_date)
                     real_factor = (1 + fixed_rate) ** (interval_workdays / BUSY_DAYS_IN_YEAR)                   
                     factor = (1 + acc_ipca) * real_factor
 
@@ -586,7 +581,7 @@ def update_fixed_income_contracts():
                     log_and_print(f"Indexador desconhecido: {indexer}", level="warning")
                     continue
                 
-                new_balance = adjusted_balance * factor
+                new_balance = balance * factor
                     
             # Atualiza Notion
             update_url = f"https://api.notion.com/v1/pages/{page_id}"
@@ -600,7 +595,7 @@ def update_fixed_income_contracts():
             resp = requests.patch(update_url, headers=notion_headers, json=payload, timeout=20)
             resp.raise_for_status()
 
-            log_and_print(f"Renda fixa atualizada: R${round(adjusted_balance, 2)} -> R${round(new_balance, 2)}")
+            log_and_print(f"Renda fixa atualizada: R${round(balance, 2)} -> R${round(new_balance, 2)}")
 
         except Exception as e:
             log_and_print(f"Erro ao atualizar renda fixa {page_id}: {e}", level="error")
