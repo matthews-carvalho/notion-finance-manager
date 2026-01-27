@@ -548,25 +548,7 @@ def update_fixed_income_contracts():
             
             end_date = min(today, due_date) if due_date else today
             
-            # Valores Base
             balance = props[FI_BALANCE]["number"] or 0
-            amount_invested = props[FI_AMOUNT_INVESTED]["formula"]["number"] or 0
-            last_amount_invested = props[FI_LAST_AMOUNT_INVESTED]["number"] or 0
-            
-            if last_update_str is None:
-                # Primeiro cálculo do ativo
-                balance = amount_invested
-                last_amount_invested = amount_invested
-            
-            # Diferença positiva indica que houve aporte; diferença negativa indica que houve saque
-            diff = amount_invested - last_amount_invested
-            
-            adjusted_balance = balance
-            
-            if diff != 0:
-                log_and_print(f"Ativo {page_id}: Movimentação de capital detectada: R$ {diff:.2f}")
-                adjusted_balance += diff
-            
             
             if start_date >= end_date:
                 log_and_print(f"Ativo {page_id} vencido.")
@@ -611,7 +593,6 @@ def update_fixed_income_contracts():
             payload = {
                 "properties": {
                     FI_BALANCE: {"number": round(new_balance, 2)},
-                    FI_LAST_AMOUNT_INVESTED: {"number": round(amount_invested, 2)},
                     FI_LAST_UPDATE: {"date": {"start": datetime.now().isoformat()}}
                 }
             }
