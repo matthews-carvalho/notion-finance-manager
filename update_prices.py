@@ -1,3 +1,4 @@
+import time
 import requests
 import logging
 from datetime import datetime, date, timedelta
@@ -19,6 +20,7 @@ FI_CONTRIBUTIONS_DATABASE_ID = os.getenv('FI_CONTRIBUTIONS_DATABASE_ID')
 FI_ASSETS_DATABASE_ID = os.getenv('FI_ASSETS_DATABASE_ID')
 FI_WITHDRAWALS_DATABASE_ID = os.getenv('FI_WITHDRAWALS_DATABASE_ID')
 FI_ALLOCATIONS_DATABASE_ID = os.getenv('FI_ALLOCATIONS_DATABASE_ID')
+IR_DATABASE_ID = os.getenv("IR_DATABASE_ID")
 TWELVE_DATA_API_KEY = os.getenv('TWELVE_DATA_API_KEY')
 YAHOO_FINANCE_API_KEY = os.getenv('YAHOO_FINANCE_API_KEY')
 BRAPI_TOKEN = os.getenv('BRAPI_TOKEN')
@@ -68,6 +70,13 @@ FIA_WITHDRAWAL_REL = "Withdrawal"
 FIA_CONTRACT_REL = "Contract"
 FIA_AMOUNT = "Amount"
 FIA_OPERATION_DATE = "Date"
+
+# Propriedades da tabela taxas do BCB
+IR_NAME = "Name"
+IR_DATE = "Date"
+IR_INDEXER = "Indexer"
+IR_ANNUAL_RATE = "Annual Rate"
+IR_SERIE_ID = "Serie ID"
 
 br_holidays = holidays.country_holidays('BR')
 BUSY_DAYS_IN_YEAR = 252
@@ -420,8 +429,18 @@ def update_variable_income_assets(database_id: str):
 
 # ------------------ API Banco Central ------------------
 
-def get_selic_over() -> Optional[float]:
-    url = "https://api.bcb.gov.br/dados/serie/bcdata.sgs.1178/dados/ultimos/1?formato=json"
+def get_selic_over(start_date: date, end_date: date) -> Optional[float]:
+    """
+    Retorna a última taxa Selic Over disponível.
+    Fonte: Banco Central do Brasil - SGS série 1178 (Taxa Selic)
+    Retorno:
+        (data_da_taxa, taxa_anual_decimal)
+    """
+    url = (
+            "https://api.bcb.gov.br/dados/serie/bcdata.sgs.4389/dados"
+            f"?formato=json&dataInicial={start_date.strftime("%d/%m/%Y")}"
+            f"&dataFinal={end_date.strftime("%d/%m/%Y")}"
+    )
     try:
         response = requests.get(url, timeout=10)
         response.raise_for_status()
@@ -432,7 +451,7 @@ def get_selic_over() -> Optional[float]:
         print(f"Erro ao buscar Selic Over: {e}")
         return None
 
-def get_cdi_rate() -> Optional[float]:
+def get_cdi_rate(start_date: date, end_date: date) -> Optional[float]:
     """
     Retorna a última taxa CDI (DI Over anualizada) disponível.
     Busca uma janela de dias para garantir retorno mesmo em feriados ou antes da divulgação.
@@ -508,14 +527,278 @@ def get_accumulated_ipca(purchase_date: date, end_date: date) -> float:
         print(f"Erro ao buscar IPCA acumulado ({start_query} → {end_date}): {e}")
         return 0.0
 
+def get_bcb_rates(indexer: str, start_date: date, end_date: date):
+    serie_map = {
+        "SELIC": 1178,
+        "CDI": 4389
+    }
+
+    serie_id = serie_map.get(indexer)
+    if not serie_id:
+        raise ValueError(f"Indexador inválido: {indexer}")
+
+    url = (
+        f"https://api.bcb.gov.br/dados/serie/bcdata.sgs.{serie_id}/dados"
+        f"?formato=json"
+        f"&dataInicial={start_date.strftime('%d/%m/%Y')}"
+        f"&dataFinal={end_date.strftime('%d/%m/%Y')}"
+    )
+
+    response = requests.get(url, timeout=20)
+    response.raise_for_status()
+
+    data = response.json()
+
+    rates = {}
+    for item in data:
+        rate_date = parser.parse(item["data"]).date()
+        annual_rate = float(item["valor"]) / 100
+        rates[rate_date] = annual_rate
+
+    return rates
+
+def get_notion_rate_dates(indexer: str, start_date: date, end_date: date):
+    query_url = f"https://api.notion.com/v1/databases/{IR_DATABASE_ID}/query"
+
+    payload = {
+        "filter": {
+            "and": [
+                {"property": IR_INDEXER, "select": {"equals": indexer}},
+                {"property": IR_DATE, "date": {"on_or_after": start_date.isoformat()}},
+                {"property": IR_DATE, "date": {"on_or_before": end_date.isoformat()}}
+            ]
+        },
+        "page_size": 100
+    }
+
+    dates = set()
+    has_more = True
+
+    while has_more:
+        resp = requests.post(query_url, headers=notion_headers, json=payload, timeout=20)
+        resp.raise_for_status()
+        data = resp.json()
+
+        for page in data["results"]:
+            date_prop = page["properties"].get(IR_DATE)
+            if date_prop and date_prop.get("date") and date_prop["date"].get("start"):
+                dates.add(parser.parse(date_prop["date"]["start"]).date())
+
+        has_more = data.get("has_more", False)
+        payload["start_cursor"] = data.get("next_cursor")
+
+    return dates
+
+def audit_and_backfill_interest_rates(
+    indexer: str,
+    start_date: date,
+    end_date: date
+):
+    log_and_print(
+        f"Auditando taxas {indexer} entre {start_date} e {end_date}..."
+    )
+
+    bcb_rates = get_bcb_rates(indexer, start_date, end_date)
+    notion_dates = get_notion_rate_dates(indexer, start_date, end_date)
+
+    missing_dates = sorted(set(bcb_rates.keys()) - notion_dates)
+
+    if not missing_dates:
+        log_and_print(f"Nenhuma data faltante para {indexer}.")
+        return
+
+    log_and_print(
+        f"{len(missing_dates)} datas faltantes encontradas para {indexer}. Corrigindo...",
+        level="warning"
+    )
+
+    create_url = "https://api.notion.com/v1/pages"
+
+    for rate_date in missing_dates:
+        annual_rate = bcb_rates[rate_date]
+
+        payload = {
+            "parent": {"database_id": IR_DATABASE_ID},
+            "properties": {
+                "Name": {
+                    "title": [{"text": {"content": f"{indexer} {rate_date}"}}]
+                },
+                IR_DATE: {
+                    "date": {"start": rate_date.isoformat()}
+                },
+                IR_INDEXER: {
+                    "select": {"name": indexer}
+                },
+                IR_ANNUAL_RATE: {
+                    "number": annual_rate
+                },
+                IR_SERIE_ID: {
+                    "number": 1178 if indexer == "SELIC" else 4389
+                }
+            }
+        }
+
+        for attempt in range(3):
+            try:
+                resp = requests.post(
+                    create_url,
+                    headers=notion_headers,
+                    json=payload,
+                    timeout=20
+                )
+                resp.raise_for_status()
+                break
+            except Exception as e:
+                if attempt == 2:
+                    log_and_print(
+                        f"Falha ao inserir {indexer} {rate_date}: {e}",
+                        level="error"
+                    )
+                else:
+                    time.sleep(1)
+
+    log_and_print(f"Backfill de {indexer} concluído.")
+
+def update_interest_rates(indexer: str):
+    """
+    Atualiza a tabela Interest Rates com dados do BCB.
+    Indexer: 'SELIC' ou 'CDI'
+    """
+
+    serie_map = {
+        "SELIC": 1178,
+        "CDI": 4389
+    }
+
+    serie_id = serie_map.get(indexer)
+    if not serie_id:
+        log_and_print(f"Indexador inválido: {indexer}", level="error")
+        return
+
+    # Descobre última data salva
+    query_url = f"https://api.notion.com/v1/databases/{IR_DATABASE_ID}/query"
+    payload = {
+        "filter": {
+            "and": [
+                {"property": IR_INDEXER, "select": {"equals": indexer}}
+            ]
+        },
+        "sorts": [
+            {"property": IR_DATE, "direction": "descending"}
+        ],
+        "page_size": 1
+    }
+
+    resp = requests.post(query_url, headers=notion_headers, json=payload)
+    resp.raise_for_status()
+    results = resp.json().get("results", [])
+
+    last_date = None
+    
+    if results:
+        try:
+            date_prop = results[0]["properties"].get(IR_DATE)
+            if date_prop and date_prop.get("date") and date_prop["date"].get("start"):
+                last_date = parser.parse(date_prop["date"]["start"]).date()
+        except Exception:
+            last_date = None
+    
+    if last_date:
+        start_date = last_date + timedelta(days=1)
+    else:
+        start_date = date(2018, 1, 1)  # início seguro
+
+    end_date = date.today()
+
+    if start_date > end_date:
+        log_and_print(f"Taxas {indexer} já atualizadas.")
+        return
+
+    # Busca no BCB
+    url = (
+        f"https://api.bcb.gov.br/dados/serie/bcdata.sgs.{serie_id}/dados"
+        f"?formato=json&dataInicial={start_date.strftime('%d/%m/%Y')}"
+        f"&dataFinal={end_date.strftime('%d/%m/%Y')}"
+    )
+
+    response = requests.get(url, timeout=20)
+    response.raise_for_status()
+    data = response.json()
+
+    # Salva no Notion
+    for item in data:
+        rate_date = parser.parse(item["data"]).date()
+        annual_rate = float(item["valor"]) / 100  # NORMALIZADO
+
+        payload = {
+            "parent": {"database_id": IR_DATABASE_ID},
+            "properties": {
+                IR_NAME: {"title": [{"text": {"content": f"{indexer} {rate_date}"}}]},
+                IR_DATE: {"date": {"start": rate_date.isoformat()}},
+                IR_INDEXER: {"select": {"name": indexer}},
+                IR_ANNUAL_RATE: {"number": annual_rate},
+                IR_SERIE_ID: {"number": serie_id}
+            }
+        }
+
+        create_url = "https://api.notion.com/v1/pages"
+        resp = requests.post(create_url, headers=notion_headers, json=payload)
+        resp.raise_for_status()
+
+    log_and_print(f"Taxas {indexer} atualizadas até {end_date}")
+
+def get_cached_rates(indexer: str, start_date: date, end_date: date):
+    """
+    Retorna taxas diárias do Notion entre start_date e end_date.
+    """
+
+    query_url = f"https://api.notion.com/v1/databases/{IR_DATABASE_ID}/query"
+
+    payload = {
+        "filter": {
+            "and": [
+                {"property": IR_INDEXER, "select": {"equals": indexer}},
+                {"property": IR_DATE, "date": {"on_or_after": start_date.isoformat()}},
+                {"property": IR_DATE, "date": {"on_or_before": end_date.isoformat()}}
+            ]
+        },
+        "sorts": [
+            {"property": IR_DATE, "direction": "ascending"}
+        ],
+        "page_size": 100
+    }
+
+    rates = []
+    has_more = True
+
+    while has_more:
+        resp = requests.post(query_url, headers=notion_headers, json=payload)
+        resp.raise_for_status()
+        data = resp.json()
+
+        for page in data["results"]:
+            props = page["properties"]
+            rates.append({
+                "date": parser.parse(props[IR_DATE]["date"]["start"]).date(),
+                "annual_rate": props[IR_ANNUAL_RATE]["number"]
+            })
+
+        has_more = data.get("has_more", False)
+        payload["start_cursor"] = data.get("next_cursor")
+
+    return rates
+
+
 # ---------------- FUNÇÕES RENDA FIXA -------------------
 
 def update_fixed_income_contracts():
+    if FI_CONTRACTS_DATABASE_ID is None:
+        log_and_print("FI_CONTRACTS_DATABASE_ID não definido. Pulando renda fixa.", level="warning")
+        return
+    
     log_and_print("Atualizando ativos de renda fixa...")
 
     today = date.today()
-    selic = get_selic_over()
-    cdi = get_cdi_rate()
 
     pages = get_pages_from_notion(FI_CONTRACTS_DATABASE_ID)
     if not pages:
@@ -564,16 +847,26 @@ def update_fixed_income_contracts():
             end_date = min(today, due_date) if due_date else today
             
             balance = props[FI_BALANCE]["number"] or 0
+            new_balance = balance
             
             if start_date >= end_date:
                 log_and_print(f"Ativo {page_id} vencido ou sem período para calcular.")
-                new_balance = balance
             else:
                 factor = 1.0               
                 
                 if indexer in ("SELIC", "CDI"):
+                    rates = get_cached_rates(indexer, start_date, end_date)
+                    if not rates:
+                        log_and_print(f"Sem taxas históricas para {indexer} entre {start_date} e {end_date}", level="error")
+                        continue
+                    
+                    for rate in rates:
+                        daily_rate = (rate["annual_rate"] * indexer_pct) + fixed_rate
+                        daily_factor = (1 + daily_rate) ** (1 / BUSY_DAYS_IN_YEAR)
+                        new_balance *= daily_factor
+                    
                     interval_workdays = get_net_workdays(start_date, end_date)
-                    annual_rate = selic if indexer == "SELIC" else cdi
+                    annual_rate = get_selic_over(start_date, end_date) if indexer == "SELIC" else get_cdi_rate(start_date, end_date)
                     if annual_rate is None:
                         log_and_print(f"Taxa anual do indexador '{indexer}' não encontrada. Pulando.", level="warning")
                         continue
@@ -912,7 +1205,15 @@ def main():
 
     process_fixed_income_contributions()
     process_withdrawals_lifo()
-    update_fixed_income_contracts()
+    
+    today = date.today()
+    start_history = date(2018, 1, 1)
+    update_interest_rates("SELIC")
+    audit_and_backfill_interest_rates("SELIC", start_history, today)
+    update_interest_rates("CDI")
+    audit_and_backfill_interest_rates("CDI", start_history, today)
+    
+    # update_fixed_income_contracts()
     
     log_and_print("Atualização concluída.")
 
