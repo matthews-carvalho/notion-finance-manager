@@ -127,7 +127,7 @@ def get_usd_brl_rate():
     print("Não foi possível obter a cotação USD/BRL.")
     return None
 
-def log_and_print(message, level='info'):
+def log_and_print(message: str, level='info'):
     print(message)
     if level == 'info':
         logging.info(message)
@@ -138,7 +138,7 @@ def log_and_print(message, level='info'):
         
 # ------------------ FUNÇÕES GERAIS -------------------------
 
-def get_net_workdays(start_date, end_date) -> int:
+def get_net_workdays(start_date: date, end_date: date) -> int:
     """Conta dias úteis entre duas datas excluindo feriados e fins de semana"""
     # Se usar numpy: return np.busday_count(start_date, end_date)
     # Implementação simples com loop (para volumes pequenos de dados é ok):
@@ -150,7 +150,7 @@ def get_net_workdays(start_date, end_date) -> int:
             days += 1
     return days
 
-def get_pages_from_notion(DATABASE_ID) -> Optional[list]:
+def get_pages_from_notion(DATABASE_ID: str) -> Optional[list]:
     try:
         url = f"https://api.notion.com/v1/databases/{DATABASE_ID}/query"
         response = requests.post(url, headers=notion_headers, timeout=20)
@@ -162,7 +162,7 @@ def get_pages_from_notion(DATABASE_ID) -> Optional[list]:
         log_and_print(f"Erro ao buscar dados do Notion: {e}", level='error')
         return []
 
-def extract_asset_name_from_title(page) -> Optional[str]:
+def extract_asset_name_from_title(page: dict) -> Optional[str]:
     try:
         properties = page['properties'] # Pega as propriedades da página
         title_field = properties[VI_TICKER] # Pega o campo do título
@@ -187,7 +187,7 @@ def is_brazilian_ticker(ticker: str) -> bool:
 
 # ---------------- FUNÇÕES RENDA VARIÁVEL -------------------
 
-def get_price_from_apis(ticker) -> Optional[float]:
+def get_price_from_apis(ticker: str) -> Optional[float]:
     """Lógica de cascata priorizando APIs com maior cobertura de ativos e número de requisições gratuitas"""
 
     # 1) EOD Historical Data (forte global + BR)
@@ -256,7 +256,7 @@ def get_price_from_apis(ticker) -> Optional[float]:
 
 # Twelve Data API para buscar o preço dos ativos dos EUA
 # https://twelvedata.com/docs/api/price
-def get_from_twelve_data(ticker) -> Optional[float]:
+def get_from_twelve_data(ticker: str) -> Optional[float]:
     try:
         url = f"https://api.twelvedata.com/price?symbol={ticker}&apikey={TWELVE_DATA_API_KEY}"
         response = requests.get(url, timeout=10)
@@ -270,7 +270,7 @@ def get_from_twelve_data(ticker) -> Optional[float]:
         log_and_print(f"Erro ao buscar preço de {ticker} na Twelve Data: {e}", level='error')
         return None
 
-def get_from_yahoo_finance(ticker, region) -> Optional[float]:
+def get_from_yahoo_finance(ticker: str, region: str) -> Optional[float]:
     try:
         # URL da API do Yahoo Finance
         #url = "https://apidojo-yahoo-finance-v1.p.rapidapi.com/stock/v2/get-timeseries"
@@ -299,7 +299,7 @@ def get_from_yahoo_finance(ticker, region) -> Optional[float]:
         log_and_print(f"Erro ao buscar preço de {ticker} no Yahoo Finance: {e}", level='error')
         return None
 
-def get_from_brapi(ticker) -> Optional[float]:
+def get_from_brapi(ticker: str) -> Optional[float]:
     try:
         url = f"https://brapi.dev/api/quote/{ticker.upper()}?token={BRAPI_TOKEN}"
         response = requests.get(url, timeout=10)
@@ -316,7 +316,7 @@ def get_from_brapi(ticker) -> Optional[float]:
         log_and_print(f"Erro ao buscar {ticker} na Brapi: {e}", level='error')
         return None
 
-def get_from_eod(ticker) -> Optional[float]:
+def get_from_eod(ticker: str) -> Optional[float]:
     try:
         url = f"https://eodhistoricaldata.com/api/eod/{ticker}?api_token={EOD_HISTORICAL_DATA_API_TOKEN}&fmt=json"
         resp = requests.get(url, timeout=10)
@@ -333,7 +333,7 @@ def get_from_eod(ticker) -> Optional[float]:
         log_and_print(f"Erro EOD Historical para {ticker}: {e}", level='error')
     return None
 
-def get_from_alpha_vantage(ticker) -> Optional[float]:
+def get_from_alpha_vantage(ticker: str) -> Optional[float]:
     try:
         url = f"https://www.alphavantage.co/query?function=GLOBAL_QUOTE&symbol={ticker}&apikey={ALPHA_VANTAGE_API_KEY}"
         resp = requests.get(url, timeout=10)
@@ -346,7 +346,7 @@ def get_from_alpha_vantage(ticker) -> Optional[float]:
         log_and_print(f"Erro AlphaVantage {ticker}: {e}", level='error')
     return None
 
-def get_from_finnhub(ticker) -> Optional[float]:
+def get_from_finnhub(ticker: str) -> Optional[float]:
     try:
         # ajusta ticker para US ou BR
         query_ticker = ticker
@@ -365,7 +365,7 @@ def get_from_finnhub(ticker) -> Optional[float]:
     return None
 
 
-def update_variable_income_asset_price_in_notion(page_id, price):
+def update_variable_income_asset_price_in_notion(page_id: str, price: float):
     try:
         url = f"https://api.notion.com/v1/pages/{page_id}"
         data = {
@@ -388,7 +388,7 @@ def update_variable_income_asset_price_in_notion(page_id, price):
     except Exception as e:
         log_and_print(f"Erro ao atualizar preço no Notion para {page_id}: {e}", level='error')
 
-def update_variable_income_assets(database_id):
+def update_variable_income_assets(database_id: str):
     log_and_print("Atualizando valores dos ativos de renda variável...")
     # Atualiza valor dos ativos de renda variável
     pages = get_pages_from_notion(database_id)
@@ -636,7 +636,7 @@ def get_unlinked_fixed_income_contributions():
     pages = data["results"]
     return pages
 
-def create_contract_from_contribution(contribution_page):
+def create_contract_from_contribution(contribution_page: dict):
     props = contribution_page["properties"]
     contribution_id = contribution_page["id"]
 
@@ -899,8 +899,16 @@ def process_withdrawals_lifo():
 def main():
     log_and_print("Iniciando atualização de investimentos...")
     
-    update_variable_income_assets(VI_ASSETS_DATABASE_ID)
-    update_variable_income_assets(VI_FOREIGN_ASSETS_DATABASE_ID)
+    if VI_ASSETS_DATABASE_ID is not None:
+        update_variable_income_assets(VI_ASSETS_DATABASE_ID)
+    else:
+        log_and_print("VI_ASSETS_DATABASE_ID não definido. Pulando renda variável (BR).", level="warning")
+
+    if VI_FOREIGN_ASSETS_DATABASE_ID is not None:
+        update_variable_income_assets(VI_FOREIGN_ASSETS_DATABASE_ID)
+    else:
+        log_and_print("VI_FOREIGN_ASSETS_DATABASE_ID não definido. Pulando renda variável (exterior).", level="warning")
+
 
     process_fixed_income_contributions()
     process_withdrawals_lifo()
