@@ -511,6 +511,10 @@ def get_accumulated_ipca(purchase_date: date, end_date: date) -> float:
 # ---------------- FUNÇÕES RENDA FIXA -------------------
 
 def update_fixed_income_contracts():
+    if FI_CONTRACTS_DATABASE_ID is None:
+        log_and_print("FI_CONTRACTS_DATABASE_ID não definido. Pulando renda fixa.", level="warning")
+        return
+    
     log_and_print("Atualizando ativos de renda fixa...")
 
     today = date.today()
