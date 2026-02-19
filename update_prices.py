@@ -459,127 +459,348 @@ def update_variable_income_assets(database_id: str):
 
         if price:
             update_variable_income_asset_price_in_notion(page_id, price)
-            log_and_print(f"Preço atualizado: {ticker} -> R${price}")
+            log_and_print(f"Preço atualizado: {ticker} -> {price}")
         else:
             log_and_print(f"Não foi possível atualizar {ticker}.", level='warning')
 
 # ------------------ API Banco Central ------------------
 
-def get_selic_over() -> Optional[float]:
-    url = "https://api.bcb.gov.br/dados/serie/bcdata.sgs.1178/dados/ultimos/1?formato=json"
-    try:
-        response = requests.get(url, timeout=10)
-        response.raise_for_status()
-        data = response.json()
-        valor = float(data[0]["valor"].replace(",", "."))
-        return valor / 100  # taxa em decimal
-    except Exception as e:
-        print(f"Erro ao buscar Selic Over: {e}")
-        return None
+def _fetch_bcb_series_data(serie_id: int, start_date: date, end_date: date, timeout: int = 20) -> list:
+    """Busca uma série do BCB em um intervalo de datas."""
+    if start_date > end_date:
+        return []
 
-def get_cdi_rate() -> Optional[float]:
+    url = f"https://api.bcb.gov.br/dados/serie/bcdata.sgs.{serie_id}/dados"
+    params = {
+        "formato": "json",
+        "dataInicial": start_date.strftime("%d/%m/%Y"),
+        "dataFinal": end_date.strftime("%d/%m/%Y"),
+    }
+    response = requests.get(url, params=params, timeout=timeout)
+    if response.status_code == 404:
+        return []
+    response.raise_for_status()
+    data = response.json()
+    if not isinstance(data, list):
+        return []
+    return data
+
+
+def get_bcb_daily_rates(indexer: str, start_date: date, end_date: date) -> dict:
     """
-    Retorna a última taxa CDI (DI Over anualizada) disponível.
-    Busca uma janela de dias para garantir retorno mesmo em feriados ou antes da divulgação.
-    
-    Fonte: Banco Central do Brasil - SGS série 4389 (Taxa DI anualizada base 252)
-    Retorno:
-        (data_da_taxa, taxa_anual_decimal)
+    Retorna taxas diárias do BCB.
+    Cada item: {date: annual_rate_decimal}
     """
+    if start_date > end_date:
+        return {}
+    indexer_norm = (indexer or "").strip().upper()
+    serie_id = BCB_DAILY_SERIES_MAP.get(indexer_norm)
+    if not serie_id:
+        log_and_print(f"Indexador inválido: {indexer}. Retornando dicionário vazio.", level="warning")
+        return {}
+
+    cache = _bcb_daily_rates_cache.setdefault(indexer_norm, {})
+    cache_range = _bcb_daily_cache_range.get(indexer_norm)
+    ranges_to_fetch: List[Tuple[date, date]] = []
+
+    if cache_range is None:
+        ranges_to_fetch.append((start_date, end_date))
+    else:
+        cached_start, cached_end = cache_range
+        if start_date < cached_start:
+            ranges_to_fetch.append((start_date, cached_start - timedelta(days=1)))
+        if end_date > cached_end:
+            ranges_to_fetch.append((cached_end + timedelta(days=1), end_date))
+
+    if ranges_to_fetch:
+        try:
+            for chunk_start, chunk_end in ranges_to_fetch:
+                data = _fetch_bcb_series_data(serie_id, chunk_start, chunk_end, timeout=20)
+                for item in data:
+                    try:
+                        # BCB retorna DD/MM/YYYY; parser genérico pode inverter dia/mês quando dia <= 12.
+                        rate_date = datetime.strptime(item["data"], "%d/%m/%Y").date()
+                        annual_rate = float(item["valor"].replace(",", "."))
+                        cache[rate_date] = annual_rate / 100  # Ex: 11.15 vira 0.1115
+                    except Exception as parse_error:
+                        log_and_print(f"Erro ao processar entrada do BCB para {indexer_norm}: {parse_error}", level="error")
+        except Exception as e:
+            log_and_print(f"Erro ao buscar {indexer_norm} no BCB: {e}. Retornando dicionário vazio.", level="error")
+            return {}
+
+        if cache_range is None:
+            _bcb_daily_cache_range[indexer_norm] = (start_date, end_date)
+        else:
+            cached_start, cached_end = cache_range
+            _bcb_daily_cache_range[indexer_norm] = (
+                min(start_date, cached_start),
+                max(end_date, cached_end),
+            )
+
+    return {
+        rate_date: annual_rate
+        for rate_date, annual_rate in cache.items()
+        if start_date <= rate_date <= end_date
+    }
+
+def _ensure_ipca_cache(start_date: date, end_date: date) -> bool:
+    """Garante cache de IPCA mensal para o intervalo informado."""
+    global _ipca_cache_range
+    if start_date > end_date:
+        return True
+
+    ranges_to_fetch: List[Tuple[date, date]] = []
+    if _ipca_cache_range is None:
+        ranges_to_fetch.append((start_date, end_date))
+    else:
+        cached_start, cached_end = _ipca_cache_range
+        if start_date < cached_start:
+            ranges_to_fetch.append((start_date, cached_start - timedelta(days=1)))
+        if end_date > cached_end:
+            ranges_to_fetch.append((cached_end + timedelta(days=1), end_date))
+
+    if not ranges_to_fetch:
+        return True
+
     try:
-        today = date.today()
-        # Voltamos 10 dias para garantir que pegaremos o último dia útil 
-        # mesmo se houver feriados prolongados (ex: Carnaval)
-        start_date = today - timedelta(days=10)
-        
-        url = (
-            "https://api.bcb.gov.br/dados/serie/bcdata.sgs.4389/dados"
-            f"?formato=json&dataInicial={start_date.strftime("%d/%m/%Y")}"
-            f"&dataFinal={today.strftime("%d/%m/%Y")}"
-        )
-
-        response = requests.get(url, timeout=15)
-        response.raise_for_status()
-
-        data = response.json()
-
-        if not data:
-            print("CDI: Nenhum dado retornado pelo BCB na janela solicitada.")
-            return None
-
-        # Pega o ÚLTIMO elemento da lista, que é a data mais recente disponível
-        last = data[-1]
-
-        rate_value = float(last["valor"]) / 100  # Ex: 11.15 viram 0.1115
-
-        return rate_value
-
+        for chunk_start, chunk_end in ranges_to_fetch:
+            data = _fetch_bcb_series_data(IPCA_SERIES_ID, chunk_start, chunk_end, timeout=10)
+            for item in data:
+                try:
+                    month_date = datetime.strptime(item["data"], "%d/%m/%Y").date()
+                    month_ipca = float(item["valor"].replace(",", ".")) / 100
+                    _ipca_monthly_cache[month_date] = month_ipca
+                except Exception as parse_error:
+                    log_and_print(f"Erro ao processar entrada do IPCA no BCB: {parse_error}", level="error")
     except Exception as e:
-        print(f"Erro ao buscar CDI: {e}")
-        return None
+        log_and_print(f"Erro ao buscar IPCA no BCB: {e}", level="error")
+        return False
+
+    if _ipca_cache_range is None:
+        _ipca_cache_range = (start_date, end_date)
+    else:
+        cached_start, cached_end = _ipca_cache_range
+        _ipca_cache_range = (min(start_date, cached_start), max(end_date, cached_end))
+    return True
+
 
 def get_accumulated_ipca(purchase_date: date, end_date: date) -> float:
     """Calcula o IPCA acumulado (composto) entre purchase_date e end_date"""
+    if purchase_date > end_date:
+        return 0.0
+
     # Força o dia 1 para garantir que a API retorne o índice do mês da compra
     # O BCB registra o IPCA sempre no dia 01/MM/AAAA
     start_query = purchase_date.replace(day=1)
-    
-    url = (
-        f"https://api.bcb.gov.br/dados/serie/bcdata.sgs.433/dados?"
-        f"dataInicial={start_query.strftime('%d/%m/%Y')}&"
-        f"dataFinal={end_date.strftime('%d/%m/%Y')}&formato=json"
-    )
-    try:
-        response = requests.get(url, timeout=10)      
-        # Tratamento para quando não há dados (ex: data muito recente onde o IPCA ainda não saiu)
-        if response.status_code == 404 or not response.json():
-            # Se for data recente (ex: mês atual), é normal não ter IPCA ainda.
-            print(f"Nenhum dado IPCA disponível entre {start_query} e {end_date}. Retornando 0.")
-            return 0.0
-        response.raise_for_status()
-        data = response.json()
-        
-        if not data:
-            print(f"Sem dados IPCA entre {start_query} e {end_date}. Retornando 0.")
-            return 0.0
 
-        accumulated = 1.0
-        for d in data:
-            value = float(d["valor"].replace(",", "."))
-            accumulated *= (1 + value / 100)
-
-        return accumulated - 1  # retorna em decimal
-    except Exception as e:
-        print(f"Erro ao buscar IPCA acumulado ({start_query} → {end_date}): {e}")
+    if not _ensure_ipca_cache(start_query, end_date):
         return 0.0
 
+    month_rates = [
+        monthly_rate
+        for month_date, monthly_rate in _ipca_monthly_cache.items()
+        if start_query <= month_date <= end_date
+    ]
+    if not month_rates:
+        log_and_print(f"Nenhum dado IPCA disponível entre {start_query} e {end_date}. Retornando 0.", level="warning")
+        return 0.0
+
+    accumulated = 1.0
+    for month_rate in month_rates:
+        accumulated *= (1 + month_rate)
+    return accumulated - 1  # retorna em decimal
+
+
+def prefetch_bcb_data_for_contracts(contracts: list, today: date) -> None:
+    """
+    Faz prefetch das séries do BCB para o maior intervalo necessário por indexador.
+    Isso reduz drasticamente o número de chamadas durante o processamento dos contratos.
+    """
+    daily_windows: Dict[str, Tuple[date, date]] = {}
+    ipca_start: Optional[date] = None
+    ipca_end: Optional[date] = None
+
+    for contract in contracts:
+        props = contract.get("properties", {})
+        try:
+            if not props.get(FI_CONTRIBUTION_DATE, {}).get("date"):
+                log_and_print(f"Contrato {contract.get('id')} sem data de aporte. Pulando.", level="warning")
+                continue
+            contribution_date = parser.parse(props[FI_CONTRIBUTION_DATE]["date"]["start"]).date()
+
+            due_date = None
+            due_rollup = props.get(FI_DUE_DATE, {}).get("rollup", {})
+            due_items = due_rollup.get("array", [])
+            if due_items:
+                date_obj = due_items[0].get("date")
+                if date_obj and date_obj.get("start"):
+                    due_date = parser.parse(date_obj["start"]).date()
+
+            end_date_cap = min(today, due_date) if due_date else today
+            if contribution_date > end_date_cap:
+                continue
+
+            indexer_rollup = props.get(FI_INDEXER, {}).get("rollup", {}).get("array", [])
+            if indexer_rollup:
+                indexer = indexer_rollup[0]["select"]["name"].upper()
+                if indexer in BCB_DAILY_SERIES_MAP:
+                    current_window = daily_windows.get(indexer)
+                    if current_window is None:
+                        daily_windows[indexer] = (contribution_date, end_date_cap)
+                    else:
+                        cur_start, cur_end = current_window
+                        daily_windows[indexer] = (
+                            min(cur_start, contribution_date),
+                            max(cur_end, end_date_cap),
+                        )
+
+            ipca_query_start = contribution_date.replace(day=1)
+            ipca_start = ipca_query_start if ipca_start is None else min(ipca_start, ipca_query_start)
+            ipca_end = end_date_cap if ipca_end is None else max(ipca_end, end_date_cap)
+        except Exception as e:
+            log_and_print(f"Erro ao preparar prefetch BCB para contrato {contract.get('id')}: {e}", level="warning")
+
+    for indexer, (range_start, range_end) in daily_windows.items():
+        get_bcb_daily_rates(indexer, range_start, range_end)
+
+    if ipca_start is not None and ipca_end is not None:
+        _ensure_ipca_cache(ipca_start, ipca_end)
+
 # ---------------- FUNÇÕES RENDA FIXA -------------------
+
+def compound_balance_period(
+    balance: float,
+    start_date: date,
+    end_date: date,
+    indexer: str,
+    indexer_pct: float,
+    fixed_rate: float,
+) -> Optional[Tuple[float, date]]:
+    """
+    Aplica juros compostos ao saldo em um período [start_date, end_date].
+    Retorna (novo_saldo, last_rate_date). Retorna None se não houver dados de taxa (ex.: SELIC/CDI vazios).
+    """
+    if start_date >= end_date:
+        return (balance, start_date)
+    new_balance = balance
+    last_rate_date = start_date
+    if indexer in ("SELIC", "CDI"):
+        rates = get_bcb_daily_rates(indexer, start_date, end_date)
+        if not rates:
+            log_and_print(f"Pulando período: {indexer} entre {start_date} e {end_date}.", level="warning")
+            return None
+        
+        # BCB já retorna apenas dias úteis, então não filtramos fins de semana/feriados aqui
+        for rate_date in sorted(rates.keys()):
+            annual_rate = rates[rate_date]
+            effective_annual_rate = (annual_rate * indexer_pct) + fixed_rate
+            daily_factor = (1 + effective_annual_rate) ** (1 / BUSY_DAYS_IN_YEAR)
+            new_balance *= daily_factor
+            last_rate_date = rate_date
+    elif indexer == "IPCA":
+        acc_ipca = get_accumulated_ipca(start_date, end_date)
+        interval_workdays = get_net_workdays(start_date, end_date)
+        real_factor = (1 + fixed_rate) ** (interval_workdays / BUSY_DAYS_IN_YEAR)
+        factor = (1 + acc_ipca) * real_factor
+        new_balance *= factor
+        last_rate_date = end_date
+    else:
+        log_and_print(f"Indexador desconhecido: {indexer}", level="warning")
+        return None
+    return (new_balance, last_rate_date)
+
+
+def recompute_contract_balance_from_timeline(
+    contract_page: dict,
+    indexer: str,
+    indexer_pct: float,
+    fixed_rate: float,
+    due_date: Optional[date],
+    today: date,
+    allocations: Optional[list] = None,
+) -> Optional[Tuple[float, date, date, float]]:
+    """
+    Recalcula o saldo do contrato a partir da timeline: aporte inicial + saques em ordem cronológica.
+    Para cada período entre eventos, aplica juros compostos; depois de cada saque, subtrai o valor.
+    Retorna (novo_saldo, last_rate_date, end_date, acc_ipca) ou None se não for possível (ex.: sem aporte).
+    """
+    contract_props = contract_page.get("properties", {})
+    
+    cont_rel = contract_props.get(FIC_CONTRIBUTION_REL, {}).get("relation", [])
+    if not cont_rel:
+        log_and_print(f"O contrato {contract_page['id']} não tem aporte vinculado. Pulando.", level="warning")
+        return None
+    
+    cont_date = contract_props.get(FI_CONTRIBUTION_DATE, {}).get("date", {}).get("start")
+    if cont_date is None:
+        log_and_print(f"O contrato {contract_page['id']} não tem data de aporte. Pulando.", level="warning")
+        return None
+    
+    cont_amount = contract_props.get(FI_PRINCIPAL_AMOUNT, {}).get("rollup", {}).get("number")
+    if cont_amount is None:
+        log_and_print(f"O contrato {contract_page['id']} não tem valor de aporte. Pulando.", level="warning")
+        return None
+    
+    contribution_date = parser.parse(cont_date).date()
+    contribution_amount = float(cont_amount)
+    if allocations is None:
+        allocations = get_allocations_for_contract(contract_page["id"])
+    balance = contribution_amount
+    last_date = contribution_date
+    last_rate_date = contribution_date
+    end_date_cap = min(today, due_date) if due_date else today
+    # Períodos: da contribuição até cada saque (e depois até hoje)
+    for alloc in allocations:
+        event_date = alloc["date"]
+        period_end = min(event_date, end_date_cap)
+        if last_date < period_end:
+            result = compound_balance_period(
+                balance, last_date, period_end, indexer, indexer_pct, fixed_rate
+            )
+            if result is None:
+                return None
+            balance, last_rate_date = result
+        if event_date <= end_date_cap:
+            balance = max(0.0, balance - alloc["amount"])
+        last_date = event_date
+    # Último período: até hoje (ou vencimento)
+    if last_date < end_date_cap:
+        result = compound_balance_period(
+            balance, last_date, end_date_cap, indexer, indexer_pct, fixed_rate
+        )
+        if result is None:
+            return None
+        balance, last_rate_date = result
+    acc_ipca = get_accumulated_ipca(contribution_date, end_date_cap)
+    return (balance, last_rate_date, end_date_cap, acc_ipca)
+
 
 def update_fixed_income_contracts():
     if FI_CONTRACTS_DATABASE_ID is None:
         log_and_print("FI_CONTRACTS_DATABASE_ID não definido. Pulando renda fixa.", level="warning")
         return
     
-    log_and_print("Atualizando ativos de renda fixa...")
+    log_and_print("Atualizando contratos de renda fixa...")
 
     today = date.today()
-    selic = get_selic_over()
-    cdi = get_cdi_rate()
 
-    pages = get_pages_from_notion(FI_CONTRACTS_DATABASE_ID)
-    if not pages:
-        log_and_print("Nenhum ativo de renda fixa encontrado.", level="warning")
+    contracts = get_all_pages_from_notion(FI_CONTRACTS_DATABASE_ID)
+    if not contracts:
+        log_and_print("Nenhum contrato de renda fixa encontrado.", level="warning")
         return
+    
+    prefetch_bcb_data_for_contracts(contracts, today)
 
-    for page in pages:
-        props = page["properties"]
-        page_id = page["id"]
+    for contract in contracts:
+        props = contract["properties"]
+        contract_id = contract["id"]
 
         try:
+            log_and_print(f">> Processando contrato {contract_id}...", level="debug")
             # Indexadores
             indexer_rollup = props[FI_INDEXER]["rollup"]["array"]
             if not indexer_rollup:
-                log_and_print(f"Ativo {page_id} sem indexador. Pulando.")
+                log_and_print(f"Contrato {contract_id} sem indexador. Pulando.")
                 continue  
             else:
                 indexer = indexer_rollup[0]["select"]["name"].upper()
@@ -589,10 +810,8 @@ def update_fixed_income_contracts():
             
             # Datas
             if not props[FI_CONTRIBUTION_DATE]["date"]:
-                log_and_print(f"Ativo {page_id} sem data de aporte. Pulando.")
+                log_and_print(f"Contrato {contract_id} sem data de aporte. Pulando.")
                 continue
-            last_update_str = props[FI_LAST_UPDATE]["date"]["start"] if props[FI_LAST_UPDATE]["date"] else None
-
             contribution_date = parser.parse(props[FI_CONTRIBUTION_DATE]["date"]["start"]).date()
             due_date = None
 
@@ -604,55 +823,84 @@ def update_fixed_income_contracts():
                 if date_obj and date_obj["start"]:
                     due_date = parser.parse(date_obj["start"]).date()
 
-            start_date = parser.parse(last_update_str).date() if last_update_str else contribution_date
+            end_date_cap = min(today, due_date) if due_date else today
 
-            if start_date >= today:
-                log_and_print(f"Ativo {page_id} já atualizado. Pulando.")
+            # Se o contrato tem alocações (saques), recalcular saldo pela timeline (histórico cronológico)
+            allocations = get_allocations_for_contract(contract_id)
+            if allocations:
+                result = recompute_contract_balance_from_timeline(
+                    contract, indexer, indexer_pct, fixed_rate, due_date, today, allocations=allocations
+                )
+                if result is not None:
+                    new_balance, last_rate_date, end_date, acc_ipca = result
+                    update_url = f"https://api.notion.com/v1/pages/{contract_id}"
+                    payload = {
+                        "properties": {
+                            FI_BALANCE: {"number": round(new_balance, 2)},
+                            FI_LAST_UPDATE: {"date": {"start": end_date.isoformat()}},
+                            FI_LAST_RATE_DATE: {"date": {"start": last_rate_date.isoformat()}},
+                            FI_INFLATION: {"number": round(acc_ipca, 4)}
+                        }
+                    }
+                    resp = requests.patch(update_url, headers=notion_headers, json=payload, timeout=20)
+                    resp.raise_for_status()
+                    log_and_print(f"Renda fixa (timeline) atualizada: {contract_id} -> R${round(new_balance, 2)}")
+                else:
+                    log_and_print(f"Contrato {contract_id} com alocações mas sem aporte vinculado. Pulando.", level="warning")
                 continue
+
+            # Contrato sem saques: compõe apenas o período ainda não processado.
+            # Para SELIC/CDI, o início deve ser a próxima data após a última taxa aplicada.
+            # FI_LAST_UPDATE permanece apenas como informação de quando o script rodou.
+            last_update_str = props[FI_LAST_UPDATE]["date"]["start"] if props[FI_LAST_UPDATE]["date"] else None
+            last_update_date = parser.parse(last_update_str).date() if last_update_str else None
             
-            end_date = min(today, due_date) if due_date else today
+            last_rate_date_str = props[FI_LAST_RATE_DATE]["date"]["start"] if props[FI_LAST_RATE_DATE]["date"] else None
+            last_rate_date = parser.parse(last_rate_date_str).date() if last_rate_date_str else contribution_date
+            
+            if last_rate_date > end_date_cap:
+                last_rate_date = end_date_cap
+            
+            next_rate_start = last_rate_date
+            if last_rate_date_str is not None:
+                next_rate_start = last_rate_date + timedelta(days=1)
+
+            if indexer in ("SELIC", "CDI"):
+                start_date = max(contribution_date, next_rate_start)
+            else:
+                # Para indexadores sem defasagem diária, mantém referência em Last Update.
+                start_date = last_update_date if last_update_date else contribution_date
+                start_date = max(contribution_date, start_date)
+            
+            end_date = end_date_cap
             
             balance = props[FI_BALANCE]["number"] or 0
+            if balance <= 0:
+                log_and_print(f"Contrato {contract_id} sem saldo. Pulando.")
+                continue
+            
+            new_balance = balance
             
             if start_date >= end_date:
-                log_and_print(f"Ativo {page_id} vencido ou sem período para calcular.")
-                new_balance = balance
+                log_and_print(f"Contrato {contract_id} vencido ou sem período para calcular.")
             else:
-                factor = 1.0               
-                
-                if indexer in ("SELIC", "CDI"):
-                    interval_workdays = get_net_workdays(start_date, end_date)
-                    annual_rate = selic if indexer == "SELIC" else cdi
-                    if annual_rate is None:
-                        log_and_print(f"Taxa anual do indexador '{indexer}' não encontrada. Pulando.", level="warning")
-                        continue
-                    
-                    # Calcula taxa efetiva anual: (indexer * percentual) + spread fixo
-                    # Ex: CDI 100% + 5% = (CDI * 1.0) + 0.05
-                    effective_annual_rate = (annual_rate * indexer_pct) + fixed_rate
-                    
-                    # Converte taxa anual para fator diário e compõe pelos dias úteis
-                    daily_factor = (1 + effective_annual_rate) ** (1 / BUSY_DAYS_IN_YEAR)
-                    factor = daily_factor ** interval_workdays
-                    
-                elif indexer == "IPCA":
-                    interval_workdays = get_net_workdays(start_date, end_date)
-                    acc_ipca = get_accumulated_ipca(start_date, end_date)
-                    real_factor = (1 + fixed_rate) ** (interval_workdays / BUSY_DAYS_IN_YEAR)                   
-                    factor = (1 + acc_ipca) * real_factor
-
-                else:
-                    log_and_print(f"Indexador desconhecido: {indexer}", level="warning")
+                result = compound_balance_period(
+                    balance, start_date, end_date, indexer, indexer_pct, fixed_rate
+                )
+                if result is None:
+                    log_and_print(f"Pulando período: {indexer} entre {start_date} e {end_date}.", level="warning")
                     continue
+                new_balance, last_rate_date = result
+            acc_ipca = get_accumulated_ipca(contribution_date, end_date)
                 
-                new_balance = balance * factor
-                    
             # Atualiza Notion
-            update_url = f"https://api.notion.com/v1/pages/{page_id}"
+            update_url = f"https://api.notion.com/v1/pages/{contract_id}"
             payload = {
                 "properties": {
                     FI_BALANCE: {"number": round(new_balance, 2)},
-                    FI_LAST_UPDATE: {"date": {"start": datetime.now().isoformat()}}
+                    FI_LAST_UPDATE: {"date": {"start": end_date.isoformat()}},
+                    FI_LAST_RATE_DATE: {"date": {"start": last_rate_date.isoformat()}},
+                    FI_INFLATION: {"number": round(acc_ipca, 4)}
                 }
             }
 
@@ -662,28 +910,70 @@ def update_fixed_income_contracts():
             log_and_print(f"Renda fixa atualizada: R${round(balance, 2)} -> R${round(new_balance, 2)}")
 
         except Exception as e:
-            log_and_print(f"Erro ao atualizar renda fixa {page_id}: {e}", level="error")
+            log_and_print(f"Erro ao atualizar renda fixa {contract_id}: {e}", level="error")
+
+def get_contribution_for_contract(contract_page: dict) -> Optional[Tuple[date, float]]:
+    """
+    Retorna (data_aporte, valor) do aporte vinculado ao contrato, ou None se não houver.
+    """
+    props = contract_page.get("properties", {})
+    rel = props.get(FIC_CONTRIBUTION_REL, {}).get("relation", [])
+    if not rel:
+        log_and_print(f"O contrato {contract_page['id']} não tem aporte vinculado. Pulando.", level="warning")
+        return None
+    contribution_id = rel[0]["id"]
+    
+    try:
+        url = f"https://api.notion.com/v1/pages/{contribution_id}"
+        response = requests.get(url, headers=notion_headers, timeout=20)
+        response.raise_for_status()
+        contribution = response.json()
+    except Exception as e:
+        log_and_print(f"Erro ao buscar página {contribution_id} do Notion: {e}", level='error')
+        return None
+    
+    contribution_props = contribution.get("properties", {})
+    amount = contribution_props.get(FIC_AMOUNT, {}).get("number")
+    date_prop = contribution_props.get(FIC_DATE, {}).get("date", {}).get("start")
+    if amount is None or not date_prop:
+        return None
+    constribution_date = parser.parse(date_prop).date()
+    return (constribution_date, float(amount))
+
+def get_allocations_for_contract(contract_id: str) -> list:
+    """
+    Retorna lista de alocações (saques) do contrato: [{"date": date, "amount": float}, ...]
+    ordenada por data (cronológica).
+    """
+    filter_payload = {
+        "property": FIA_CONTRACT_REL,
+        "relation": {"contains": contract_id}
+    }
+    try:
+        results = get_all_pages_from_notion(FI_ALLOCATIONS_DATABASE_ID, filter_payload=filter_payload) or []
+    except Exception as e:
+        log_and_print(f"Erro ao buscar alocações do contrato {contract_id}: {e}", level="error")
+        return []
+    out = []
+    for page in results:
+        props = page.get("properties", {})
+        amt = props.get(FIA_AMOUNT, {}).get("number")
+        date_prop = props.get(FIA_OPERATION_DATE, {}).get("date", {}).get("start")
+        if amt is not None and date_prop:
+            out.append({"date": parser.parse(date_prop).date(), "amount": float(amt)})
+    out.sort(key=lambda x: x["date"])
+    return out
 
 def get_unlinked_fixed_income_contributions():
     """
     Retorna aportes de renda fixa que ainda não possuem contrato vinculado
     """
-    url = f"https://api.notion.com/v1/databases/{FI_CONTRIBUTIONS_DATABASE_ID}/query"
-
-    payload = {
-        "filter": {
-            "property": FIC_CONTRACT,
-            "relation": {
-                "is_empty": True
-            }
-        }
+    filter_payload = {
+        "property": FIC_CONTRACT,
+        "relation": {"is_empty": True}
     }
-
-    response = requests.post(url, headers=notion_headers, json=payload, timeout=20)
-    response.raise_for_status()
-    data = response.json()
-    pages = data["results"]
-    return pages
+    pages = get_all_pages_from_notion(FI_CONTRIBUTIONS_DATABASE_ID, filter_payload=filter_payload)
+    return pages or []
 
 def create_contract_from_contribution(contribution_page: dict):
     props = contribution_page["properties"]
@@ -693,11 +983,10 @@ def create_contract_from_contribution(contribution_page: dict):
     if not props[FIC_ASSET]["relation"]:
         raise ValueError("Aporte sem ativo vinculado")
 
+    today = date.today()
     asset_id = props[FIC_ASSET]["relation"][0]["id"]
     amount = props[FIC_AMOUNT]["number"]
-    contribution_date = parser.parse(
-        props[FIC_DATE]["date"]["start"]
-    ).date()
+    contribution_date = parser.parse(props[FIC_DATE]["date"]["start"]).date() if props[FIC_DATE]["date"] else today
 
     additional_fixed_rate = props[FIC_ADDITIONAL_FIXED_RATE]["number"] or 0.0
 
@@ -743,6 +1032,12 @@ def create_contract_from_contribution(contribution_page: dict):
     response.raise_for_status()
 
 def process_fixed_income_contributions():
+    """ 
+    Processa novos aportes de renda fixa que ainda não foram vinculadas a contratos.
+
+    Esta função busca todos os aportes de renda fixa não vinculados a um contrato do banco de dados do Notion,
+    cria um contrato correspondente para cada um e registra o resultado de cada operação.
+    """
     log_and_print("Processando aportes de renda fixa...")
 
     contributions = get_unlinked_fixed_income_contributions()
@@ -769,43 +1064,31 @@ def get_unprocessed_withdrawals() -> list:
     """
     Retorna saques não processados (Processed checkbox == False)
     """
-    url = f"https://api.notion.com/v1/databases/{FI_WITHDRAWALS_DATABASE_ID}/query"
-    payload = {
-        "filter": {
-            "property": FIW_PROCESSED,
-            "checkbox": {"equals": False}
-        }
+    filter_payload = {
+        "property": FIW_PROCESSED,
+        "checkbox": {"equals": False}
     }
-    response = requests.post(url, headers=notion_headers, json=payload, timeout=20)
-    response.raise_for_status()
-    data = response.json()
-    pages = data["results"]
-    return pages
+    pages = get_all_pages_from_notion(FI_WITHDRAWALS_DATABASE_ID, filter_payload=filter_payload)
+    return pages or []
 
 def get_contracts_lifo_for_asset(asset_id: str) -> list:
     """
     Busca contratos do asset ordenados por Contribution Date desc e ID desc (LIFO).
     """
-    url = f"https://api.notion.com/v1/databases/{FI_CONTRACTS_DATABASE_ID}/query"
-
-    payload = {
-        "filter": {
-            "property": "Asset",
-            "relation": {"contains": asset_id}
-        },
-        "sorts": [
-            {"property": FI_CONTRIBUTION_DATE, "direction": "descending"},
-            {"property": FI_CONTRACT_UNIQUE_ID, "direction": "descending"}
-        ],
-        "page_size": 100
+    filter_payload = {
+        "property": "Asset",
+        "relation": {"contains": asset_id}
     }
-
-    response = requests.post(url, headers=notion_headers, json=payload, timeout=30)
-    response.raise_for_status()
-    data = response.json()
-    pages = data["results"]
-    return pages
-
+    sorts = [
+        {"property": FI_CONTRIBUTION_DATE, "direction": "descending"},
+        {"property": FI_CONTRACT_UNIQUE_ID, "direction": "descending"}
+    ]
+    pages = get_all_pages_from_notion(
+        FI_CONTRACTS_DATABASE_ID,
+        filter_payload=filter_payload,
+        sorts=sorts
+    )
+    return pages or []
 
 def compute_withdrawal_allocations_for_asset(asset_id: str, amount: float) -> list:
     """
@@ -829,12 +1112,13 @@ def compute_withdrawal_allocations_for_asset(asset_id: str, amount: float) -> li
 
     return allocations
 
-
-def create_allocation_record(withdrawal_id: str, contract_id: str, amount: float):
+def create_allocation_record(withdrawal_id: str, contract_id: str, amount: float, operation_date: Optional[date] = None):
     """
     Cria um registro na tabela Withdrawal Allocations ligado ao saque e contrato.
+    operation_date: data em que o saque ocorreu (para timeline de juros). Se None, usa hoje.
     Retorna allocation_id.
     """
+    op_date = operation_date or date.today()
     payload = {
         "parent": {"database_id": FI_ALLOCATIONS_DATABASE_ID},
         "properties": {
@@ -844,7 +1128,7 @@ def create_allocation_record(withdrawal_id: str, contract_id: str, amount: float
             FIA_WITHDRAWAL_REL: {"relation": [{"id": withdrawal_id}]},
             FIA_CONTRACT_REL: {"relation": [{"id": contract_id}]},
             FIA_AMOUNT: {"number": round(amount, 2)},
-            FIA_OPERATION_DATE: {"date": {"start": datetime.now().isoformat()}}
+            FIA_OPERATION_DATE: {"date": {"start": op_date.isoformat()}}
         }
     }
 
@@ -853,34 +1137,6 @@ def create_allocation_record(withdrawal_id: str, contract_id: str, amount: float
     data = response.json()
     allocation_id = data["id"]
     return allocation_id
-
-def update_contract_balance_and_withdrawn(contract_id: str, deduction: float):
-    """
-    Subtrai deduction do Balance na página do contrato.
-    """
-    # Buscar a página atual para ler as propriedades
-    url_get = f"https://api.notion.com/v1/pages/{contract_id}"
-    resp_get = requests.get(url_get, headers=notion_headers, timeout=20)
-    resp_get.raise_for_status()
-    contract = resp_get.json()
-    props = contract["properties"]
-
-    current_balance = props.get(FI_BALANCE, {}).get("number") or 0.0
-
-    new_balance = round(max(0.0, current_balance - deduction), 2)
-
-    payload = {
-        "properties": {
-            FI_BALANCE: {"number": new_balance}
-        }
-    }
-    
-    # Apenas define FI_CLOSED como True quanto balance chegar a 0
-    if new_balance == 0:
-        payload["properties"][FI_CLOSED] = {"checkbox": True}
-
-    resp = requests.patch(f"https://api.notion.com/v1/pages/{contract_id}", headers=notion_headers, json=payload, timeout=20)
-    resp.raise_for_status()
 
 def link_withdrawal_to_allocations(withdrawal_id: str, allocation_ids: list, processed_amount: float):
     """
@@ -918,24 +1174,32 @@ def process_withdrawals_lifo():
             asset_id = props[FIW_ASSET]["relation"][0]["id"]
             amount = props.get(FIW_AMOUNT, {}).get("number") or 0.0
 
+            # Data em que o saque ocorreu (para timeline de juros); se não houver, usa hoje
+            withdrawal_date = date.today()
+            if props.get(FIW_DATE, {}).get("date") and props[FIW_DATE]["date"].get("start"):
+                withdrawal_date = parser.parse(props[FIW_DATE]["date"]["start"]).date()
+
             # calcula alocações em memória e valida saldo
             allocations = compute_withdrawal_allocations_for_asset(asset_id, amount)
             
             # calcula o valor processado total (antes do loop para garantir que está sempre definido)
             processed_amount = round(sum(allocation["deduction"] for allocation in allocations), 2)
+            
+            if processed_amount <= 0:
+                log_and_print(f"Saque {withdrawal_id} sem saldo. Pulando.", level="warning")
+                continue
+            elif processed_amount < amount:
+                log_and_print(f"Saque {withdrawal_id} com saldo insuficiente. Criando alocações parciais.", level="warning")
 
-            # Persiste: cria alocações e atualiza contratos
+            # Persiste: apenas cria alocações
             allocation_ids = []
             for alloc in allocations:
                 contract_id = alloc["contract_id"]
                 deduct = alloc["deduction"]
 
-                # cria allocation record
-                alloc_id = create_allocation_record(withdrawal_id, contract_id, deduct)
+                # cria allocation record (com data do saque para timeline)
+                alloc_id = create_allocation_record(withdrawal_id, contract_id, deduct, operation_date=withdrawal_date)
                 allocation_ids.append(alloc_id)
-                
-                # atualiza contrato (balance e total withdrawn)
-                update_contract_balance_and_withdrawn(contract_id, deduct)
             
             # linka o saque às alocações e marca processed
             link_withdrawal_to_allocations(withdrawal_id, allocation_ids, processed_amount)
@@ -946,7 +1210,7 @@ def process_withdrawals_lifo():
             log_and_print(f"Erro ao processar saque {wd['id']}: {e}", level="error")
 
 def main():
-    log_and_print("Iniciando atualização de investimentos...")
+    log_and_print(f"Iniciando atualização de investimentos (Data: {datetime.now().strftime('%d/%m/%Y %H:%M:%S')})...")
     
     if VI_ASSETS_DATABASE_ID is not None:
         update_variable_income_assets(VI_ASSETS_DATABASE_ID)
@@ -957,7 +1221,6 @@ def main():
         update_variable_income_assets(VI_FOREIGN_ASSETS_DATABASE_ID)
     else:
         log_and_print("VI_FOREIGN_ASSETS_DATABASE_ID não definido. Pulando renda variável (exterior).", level="warning")
-
 
     process_fixed_income_contributions()
     process_withdrawals_lifo()
