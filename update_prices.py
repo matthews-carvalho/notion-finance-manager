@@ -165,14 +165,44 @@ def get_net_workdays(start_date: date, end_date: date) -> int:
             days += 1
     return days
 
-def get_pages_from_notion(DATABASE_ID: str) -> Optional[list]:
+def get_all_pages_from_notion(
+    DATABASE_ID: Optional[str],
+    filter_payload: Optional[dict] = None,
+    sorts: Optional[list] = None,
+) -> Optional[list]:
+    """
+    Busca TODOS os registros de um database do Notion, tratando paginação automaticamente (Notion retorna no máximo 100 registros por requisição).
+    Suporta filtros e ordenações opcionais.
+    """
+    if not DATABASE_ID:
+        return []
     try:
         url = f"https://api.notion.com/v1/databases/{DATABASE_ID}/query"
-        response = requests.post(url, headers=notion_headers, timeout=20)
-        response.raise_for_status()
-        data = response.json()
-        pages = data['results']
-        return pages
+        all_pages = []
+        start_cursor = None
+
+        while True:
+            payload: dict = {"page_size": 100}
+            if filter_payload:
+                payload["filter"] = filter_payload
+            if sorts:
+                payload["sorts"] = sorts
+            if start_cursor:
+                payload["start_cursor"] = start_cursor
+
+            response = requests.post(url, headers=notion_headers, json=payload, timeout=30)
+            response.raise_for_status()
+            data = response.json()
+            pages = data.get("results", [])
+            all_pages.extend(pages)
+
+            if not data.get("has_more", False):
+                break
+            start_cursor = data.get("next_cursor")
+            if not start_cursor:
+                break
+
+        return all_pages
     except Exception as e:
         log_and_print(f"Erro ao buscar dados do Notion: {e}", level='error')
         return []
@@ -406,7 +436,7 @@ def update_variable_income_asset_price_in_notion(page_id: str, price: float):
 def update_variable_income_assets(database_id: str):
     log_and_print("Atualizando valores dos ativos de renda variável...")
     # Atualiza valor dos ativos de renda variável
-    pages = get_pages_from_notion(database_id)
+    pages = get_all_pages_from_notion(database_id)
 
     if not pages:
         log_and_print("Nenhum ativo encontrado ou erro na consulta!", level='warning')
