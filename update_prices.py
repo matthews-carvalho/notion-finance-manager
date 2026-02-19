@@ -5,7 +5,7 @@ from dateutil import parser
 import os
 from dotenv import load_dotenv
 import holidays
-from typing import Optional, Tuple
+from typing import Optional, Tuple, Dict, List
 import re
 
 load_dotenv() # Carrega variáveis de ambiente do arquivo .env
