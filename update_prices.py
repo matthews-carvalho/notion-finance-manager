@@ -39,6 +39,7 @@ FI_INDEXER = "Indexer" # Indexador (SELIC, IPCA, CDI)
 FI_INDEXER_PCT = "Indexer %" # Percentual do indexador (ex: 100% do CDI)
 FI_ADDITIONAL_FIXED_RATE = "Additional Fixed Rate" # Taxa fixa adicional (para IPCA+ ou pré-fixado)
 FI_BALANCE = "Balance" # Saldo atual com juros compostos
+FI_PRINCIPAL_AMOUNT = "Principal Amount" # Valor aportado
 FI_VARIATION = "Variation" # Percentual de variação do saldo
 FI_LAST_UPDATE = "Last Update" # Data da última atualização
 FI_CONTRIBUTION_DATE = "Contribution Date" # Data da compra
@@ -46,6 +47,7 @@ FI_DUE_DATE = "Due Date" # Data de vencimento
 FI_INFLATION = "Inflation" # Inflação (IPCA)
 FI_CLOSED = "Closed" # Fechado
 FI_CONTRACT_UNIQUE_ID = "ID" # Propriedade unique id on contracts (tie-breaker)
+FI_LAST_RATE_DATE = "Last Rate Date" # Data da última taxa diária utilizada no cálculo dos juros compostos
 
 # Propriedades dos aportes de renda fixa
 FIC_ASSET = "Asset"                     # Relation → Fixed Income Assets
@@ -58,6 +60,7 @@ FIC_CONTRIBUTION_REL = "Contribution"  # Relation
 # Propriedades da tabela de saques de renda fixa
 FIW_ASSET = "Asset"
 FIW_AMOUNT = "Amount"
+FIW_DATE = "Date"  # Data em que o saque ocorreu (para timeline de juros)
 FIW_PROCESSED = "Processed"
 FIW_PROCESSING_DATE = "Processing Date"
 FIW_ALLOCATIONS_REL = "Allocations"
@@ -71,6 +74,18 @@ FIA_OPERATION_DATE = "Date"
 
 br_holidays = holidays.country_holidays('BR')
 BUSY_DAYS_IN_YEAR = 252
+
+BCB_DAILY_SERIES_MAP = {
+    "SELIC": 1178,
+    "CDI": 4389,
+}
+IPCA_SERIES_ID = 433
+
+# Cache em memória para reduzir chamadas repetidas ao BCB no mesmo run.
+_bcb_daily_rates_cache: Dict[str, Dict[date, float]] = {}
+_bcb_daily_cache_range: Dict[str, Tuple[date, date]] = {}
+_ipca_monthly_cache: Dict[date, float] = {}
+_ipca_cache_range: Optional[Tuple[date, date]] = None
 
 notion_headers = {
     "Authorization": f"Bearer {NOTION_TOKEN}",
