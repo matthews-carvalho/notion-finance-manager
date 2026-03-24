@@ -1156,6 +1156,14 @@ def link_withdrawal_to_allocations(withdrawal_id: str, allocation_ids: list, pro
 
 
 def process_withdrawals_lifo():
+    """
+    Processa saques (LIFO)
+    Esta função busca todos os saques não processados (Processed checkbox == False)
+    e processa cada saque em ordem de data de saque (Contribution Date desc e ID desc).
+    Para cada saque, calcula as alocações (contract_id, deduction) e verifica se há saldo suficiente.
+    Se houver saldo suficiente, cria um registro na tabela Withdrawal Allocations ligado ao saque e contrato.
+    Em seguida, atualiza a página do saque para relacionar as alocações (campo Allocations), salvar data, valor processado e marca como processado.
+    """
     log_and_print("Processando saques (LIFO)...")
     withdrawals = get_unprocessed_withdrawals()
     if not withdrawals:
