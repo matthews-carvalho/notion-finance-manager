@@ -784,7 +784,19 @@ def update_fixed_income_contracts():
 
     today = date.today()
 
-    contracts = get_all_pages_from_notion(FI_CONTRACTS_DATABASE_ID)
+    filter_payload = {
+        "and": [
+            {
+                "property": FIC_CONTRIBUTION_REL, 
+                "relation": {"is_not_empty": True}
+            },
+            {
+                "property": FI_CLOSED, 
+                "checkbox": {"equals": False}
+            }
+        ]
+    }
+    contracts = get_all_pages_from_notion(FI_CONTRACTS_DATABASE_ID, filter_payload=filter_payload)
     if not contracts:
         log_and_print("Nenhum contrato de renda fixa encontrado.", level="warning")
         return
