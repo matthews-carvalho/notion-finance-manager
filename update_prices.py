@@ -721,7 +721,9 @@ def recompute_contract_balance_from_timeline(
 ) -> Optional[Tuple[float, date, date, float]]:
     """
     Recalcula o saldo do contrato a partir da timeline: aporte inicial + saques em ordem cronológica.
-    Para cada período entre eventos, aplica juros compostos; depois de cada saque, subtrai o valor.
+    Convenção: compõe juros até a data do saque (inclusive) e só então subtrai o valor.
+    Após o saque, o próximo período começa no dia seguinte ao saque.
+    Juros só são compostos até min(today, due_date); após vencimento, apenas deduz saques (sem novos juros).
     Retorna (novo_saldo, last_rate_date, end_date, acc_ipca) ou None se não for possível (ex.: sem aporte).
     """
     contract_props = contract_page.get("properties", {})
@@ -748,31 +750,76 @@ def recompute_contract_balance_from_timeline(
     balance = contribution_amount
     last_date = contribution_date
     last_rate_date = contribution_date
-    end_date_cap = min(today, due_date) if due_date else today
-    # Períodos: da contribuição até cada saque (e depois até hoje)
+    compounding_end = min(today, due_date) if due_date else today
+    timeline_end = today
+
+    # Períodos: juros até a data do saque (inclusive), depois deduz saque, próximo período começa no dia seguinte.
+    post_due_mode = False  # quando True: subtrai saques sem mais compor juros
     for alloc in allocations:
         event_date = alloc["date"]
-        period_end = min(event_date, end_date_cap)
-        if last_date < period_end:
-            result = compound_balance_period(
-                balance, last_date, period_end, indexer, indexer_pct, fixed_rate
-            )
-            if result is None:
-                return None
-            balance, last_rate_date = result
-        if event_date <= end_date_cap:
+        if event_date > timeline_end:
+            break
+
+        if not post_due_mode:
+            if event_date <= compounding_end:
+                # Juros até a data do saque (inclusive) e então subtrai.
+                period_end = event_date
+                if last_date <= period_end:
+                    result = compound_balance_period(
+                        balance,
+                        last_date,
+                        period_end,
+                        indexer,
+                        indexer_pct,
+                        fixed_rate,
+                    )
+                    if result is None:
+                        return None
+                    balance, last_rate_date = result
+
+                balance = max(0.0, balance - alloc["amount"])
+                if balance <= 0:
+                    break
+
+                # Próximo período começa no dia seguinte ao saque.
+                last_date = event_date + timedelta(days=1)
+            else:
+                # Primeiro saque após expiração: compor uma única vez até `due_date`,
+                # depois aplicar saques como dedução (sem mais juros).
+                if last_date <= compounding_end:
+                    result = compound_balance_period(
+                        balance,
+                        last_date,
+                        compounding_end,
+                        indexer,
+                        indexer_pct,
+                        fixed_rate,
+                    )
+                    if result is None:
+                        return None
+                    balance, last_rate_date = result
+                last_date = compounding_end + timedelta(days=1)
+                post_due_mode = True
+
+                balance = max(0.0, balance - alloc["amount"])
+                if balance <= 0:
+                    break
+        else:
+            # Após vencimento: apenas deduz saques.
             balance = max(0.0, balance - alloc["amount"])
-        last_date = event_date
-    # Último período: até hoje (ou vencimento)
-    if last_date < end_date_cap:
+            if balance <= 0:
+                break
+
+    # Último período de juros: até min(today, due_date)
+    if balance > 0 and not post_due_mode and last_date <= compounding_end:
         result = compound_balance_period(
-            balance, last_date, end_date_cap, indexer, indexer_pct, fixed_rate
+            balance, last_date, compounding_end, indexer, indexer_pct, fixed_rate
         )
         if result is None:
             return None
         balance, last_rate_date = result
-    acc_ipca = get_accumulated_ipca(contribution_date, end_date_cap)
-    return (balance, last_rate_date, end_date_cap, acc_ipca)
+    acc_ipca = get_accumulated_ipca(contribution_date, compounding_end)
+    return (balance, last_rate_date, timeline_end, acc_ipca)
 
 
 def update_fixed_income_contracts():
