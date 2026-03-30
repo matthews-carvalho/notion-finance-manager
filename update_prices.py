@@ -892,13 +892,15 @@ def update_fixed_income_contracts():
                 )
                 if result is not None:
                     new_balance, last_rate_date, end_date, acc_ipca = result
+                    is_closed = new_balance <= 0
                     update_url = f"https://api.notion.com/v1/pages/{contract_id}"
                     payload = {
                         "properties": {
                             FI_BALANCE: {"number": round(new_balance, 2)},
                             FI_LAST_UPDATE: {"date": {"start": end_date.isoformat()}},
                             FI_LAST_RATE_DATE: {"date": {"start": last_rate_date.isoformat()}},
-                            FI_INFLATION: {"number": round(acc_ipca, 4)}
+                            FI_INFLATION: {"number": round(acc_ipca, 4)},
+                            FI_CLOSED: {"checkbox": is_closed},
                         }
                     }
                     resp = requests.patch(update_url, headers=notion_headers, json=payload, timeout=20)
@@ -935,7 +937,17 @@ def update_fixed_income_contracts():
             
             balance = props[FI_BALANCE]["number"] or 0
             if balance <= 0:
-                log_and_print(f"Contrato {contract_id} sem saldo. Pulando.")
+                update_url = f"https://api.notion.com/v1/pages/{contract_id}"
+                payload = {
+                    "properties": {
+                        FI_BALANCE: {"number": 0},
+                        FI_CLOSED: {"checkbox": True},
+                        FI_LAST_UPDATE: {"date": {"start": end_date.isoformat()}},
+                    }
+                }
+                resp = requests.patch(update_url, headers=notion_headers, json=payload, timeout=20)
+                resp.raise_for_status()
+                log_and_print(f"Contrato {contract_id} fechado (saldo zerado).")
                 continue
             
             new_balance = balance
@@ -951,6 +963,7 @@ def update_fixed_income_contracts():
                     continue
                 new_balance, last_rate_date = result
             acc_ipca = get_accumulated_ipca(contribution_date, end_date)
+            is_closed = new_balance <= 0
                 
             # Atualiza Notion
             update_url = f"https://api.notion.com/v1/pages/{contract_id}"
@@ -959,7 +972,8 @@ def update_fixed_income_contracts():
                     FI_BALANCE: {"number": round(new_balance, 2)},
                     FI_LAST_UPDATE: {"date": {"start": end_date.isoformat()}},
                     FI_LAST_RATE_DATE: {"date": {"start": last_rate_date.isoformat()}},
-                    FI_INFLATION: {"number": round(acc_ipca, 4)}
+                    FI_INFLATION: {"number": round(acc_ipca, 4)},
+                    FI_CLOSED: {"checkbox": is_closed},
                 }
             }
 
