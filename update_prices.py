@@ -677,18 +677,21 @@ def compound_balance_period(
     fixed_rate: float,
 ) -> Optional[Tuple[float, date]]:
     """
-    Aplica juros compostos ao saldo em um período [start_date, end_date].
+    Aplica juros compostos ao saldo em um período [start_date, end_date] (ambos inclusivos).
     Retorna (novo_saldo, last_rate_date). Retorna None se não houver dados de taxa (ex.: SELIC/CDI vazios).
+    start_date == end_date aplica um único dia útil (quando houver cotação no BCB); se for fim de semana/sem série, mantém o saldo.
     """
-    if start_date >= end_date:
+    if start_date > end_date:
         return (balance, start_date)
     new_balance = balance
     last_rate_date = start_date
     if indexer in ("SELIC", "CDI"):
         rates = get_bcb_daily_rates(indexer, start_date, end_date)
         if not rates:
+            if start_date == end_date:
+                return (balance, start_date)
             log_and_print(f"Pulando período: {indexer} entre {start_date} e {end_date}.", level="warning")
-            return None
+            return (balance, start_date)
         
         # BCB já retorna apenas dias úteis, então não filtramos fins de semana/feriados aqui
         for rate_date in sorted(rates.keys()):
