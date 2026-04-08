@@ -910,7 +910,7 @@ def update_fixed_income_contracts():
                     resp.raise_for_status()
                     log_and_print(f"Renda fixa (timeline) atualizada: {contract_id} -> R${round(new_balance, 2)}")
                 else:
-                    log_and_print(f"Contrato {contract_id} com alocações mas sem aporte vinculado. Pulando.", level="warning")
+                    log_and_print(f"Verificar contrato: {contract_id}. Pulando.", level="warning")
                 continue
 
             # Contrato sem saques: compõe apenas o período ainda não processado.
