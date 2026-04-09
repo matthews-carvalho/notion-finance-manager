@@ -867,7 +867,8 @@ def update_fixed_income_contracts():
             else:
                 indexer = indexer_rollup[0]["select"]["name"].upper()
           
-            indexer_pct = props[FI_INDEXER_PCT]["rollup"]["number"] or 1.0
+            raw_pct = props[FI_INDEXER_PCT]["rollup"]["number"]
+            indexer_pct = raw_pct if raw_pct is not None else 1.0
             fixed_rate = props[FI_ADDITIONAL_FIXED_RATE]["number"] or 0.0
             
             # Datas
