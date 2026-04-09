@@ -858,7 +858,7 @@ def update_fixed_income_contracts():
         contract_id = contract["id"]
 
         try:
-            log_and_print(f">> Processando contrato {contract_id}...", level="debug")
+            log_and_print(f">> Processando contrato {contract_id}...", level="info")
             # Indexadores
             indexer_rollup = props[FI_INDEXER]["rollup"]["array"]
             if not indexer_rollup:
