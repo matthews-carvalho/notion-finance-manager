@@ -958,6 +958,7 @@ def update_fixed_income_contracts():
             
             if start_date >= end_date:
                 log_and_print(f"Contrato {contract_id} vencido ou sem período para calcular.")
+                continue
             else:
                 result = compound_balance_period(
                     balance, start_date, end_date, indexer, indexer_pct, fixed_rate
