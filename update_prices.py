@@ -274,10 +274,23 @@ def get_price_from_apis(ticker: str) -> Optional[float]:
 
     # 5) Finnhub (fallback global)
     log_and_print(f"Alpha Vantage não encontrou {ticker}, tentando Finnhub...")
-    price = get_from_finnhub(ticker)
-    if price:
-        return price
-
+    finnhub_variations = []
+    
+    # Se parecer um ticker brasileiro, adiciona .SA
+    if is_brazilian_ticker(ticker):
+        finnhub_variations.append(f"{ticker}.SA")
+    
+    # Adiciona variação com .US
+    finnhub_variations.append(f"{ticker}.US")
+    
+    # Adiciona variação sem sufixo
+    finnhub_variations.append(ticker)
+    
+    for finnhub_ticker in finnhub_variations:
+        price = get_from_finnhub(finnhub_ticker)
+        if price:
+            return price
+    
     # 6) Yahoo Finance (fallback final) - tenta múltiplas variações de ticker
     log_and_print(f"Finnhub não encontrou {ticker}, tentando Yahoo Finance...")
     yahoo_variations = [
@@ -393,12 +406,7 @@ def get_from_alpha_vantage(ticker: str) -> Optional[float]:
 
 def get_from_finnhub(ticker: str) -> Optional[float]:
     try:
-        # ajusta ticker para US ou BR
-        query_ticker = ticker
-        if ticker[-2:].isalpha() and not "." in ticker:
-            # B3 FIIs/ações
-            query_ticker = f"{ticker}.SA"
-        url = f"https://finnhub.io/api/v1/quote?symbol={query_ticker}&token={FINNHUB_API_KEY}"
+        url = f"https://finnhub.io/api/v1/quote?symbol={ticker}&token={FINNHUB_API_KEY}"
         resp = requests.get(url, timeout=10)
         resp.raise_for_status()
         data = resp.json()
