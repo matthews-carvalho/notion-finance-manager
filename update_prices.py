@@ -423,7 +423,7 @@ def update_variable_income_asset_price_in_notion(page_id: str, price: float):
                 }
             }
         }
-        response = requests.patch(url, headers=notion_headers, json=data)
+        response = requests.patch(url, headers=notion_headers, json=data, timeout=20)
         
         if response.status_code == 200:
             log_and_print(f"Preço atualizado com sucesso no Notion para {page_id}.")
