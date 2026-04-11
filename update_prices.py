@@ -998,34 +998,6 @@ def update_fixed_income_contracts():
         except Exception as e:
             log_and_print(f"Erro ao atualizar renda fixa {contract_id}: {e}", level="error")
 
-def get_contribution_for_contract(contract_page: dict) -> Optional[Tuple[date, float]]:
-    """
-    Retorna (data_aporte, valor) do aporte vinculado ao contrato, ou None se não houver.
-    """
-    props = contract_page.get("properties", {})
-    rel = props.get(FIC_CONTRIBUTION_REL, {}).get("relation", [])
-    if not rel:
-        log_and_print(f"O contrato {contract_page['id']} não tem aporte vinculado. Pulando.", level="warning")
-        return None
-    contribution_id = rel[0]["id"]
-    
-    try:
-        url = f"https://api.notion.com/v1/pages/{contribution_id}"
-        response = requests.get(url, headers=notion_headers, timeout=20)
-        response.raise_for_status()
-        contribution = response.json()
-    except Exception as e:
-        log_and_print(f"Erro ao buscar página {contribution_id} do Notion: {e}", level='error')
-        return None
-    
-    contribution_props = contribution.get("properties", {})
-    amount = contribution_props.get(FIC_AMOUNT, {}).get("number")
-    date_prop = contribution_props.get(FIC_DATE, {}).get("date", {}).get("start")
-    if amount is None or not date_prop:
-        return None
-    constribution_date = parser.parse(date_prop).date()
-    return (constribution_date, float(amount))
-
 def get_allocations_for_contract(contract_id: str) -> list:
     """
     Retorna lista de alocações (saques) do contrato: [{"date": date, "amount": float}, ...]
